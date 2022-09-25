@@ -583,6 +583,7 @@ class DivEngine {
   friend class DivExportAmigaValidation;
   friend class DivExportSAPR;
   friend class DivExportTiuna;
+  friend class DivExportAtari2600;
   friend class DivExportZSM;
   friend class DivExportiPod;
   friend class DivExportGRUB;
@@ -753,6 +754,9 @@ class DivEngine {
 
     // play by one row
     void stepOne(int row);
+
+    // returns true if end of song.
+    bool nextTick(bool noAccum=false, bool inhibitLowLat=false);
 
     // stop
     void stop();
