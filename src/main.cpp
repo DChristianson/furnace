@@ -85,9 +85,12 @@ FurnaceCLI cli;
 
 String outName;
 String vgmOutName;
+String zsmOutName;
+String romOutName;
 String cmdOutName;
 String romOutName;
 String txtOutName;
+
 int benchMode=0;
 int subsong=-1;
 DivAudioExportOptions exportOptions;
@@ -429,6 +432,13 @@ TAParamResult pOutput(String val) {
   return TA_PARAM_SUCCESS;
 }
 
+TAParamResult pROMOut(String val) {
+  romOutName=val;
+  e.setAudio(DIV_AUDIO_DUMMY);
+  return TA_PARAM_SUCCESS;
+}
+
+
 TAParamResult pVGMOut(String val) {
   vgmOutName=val;
   e.setAudio(DIV_AUDIO_DUMMY);
@@ -579,6 +589,7 @@ int main(int argc, char** argv) {
 #endif
   outName="";
   vgmOutName="";
+  zsmOutName="";
   cmdOutName="";
   romOutName="";
   txtOutName="";
@@ -910,6 +921,35 @@ int main(int argc, char** argv) {
         delete w;
       } else {
         reportError(_("could not write VGM!"));
+      }
+    }
+    if (romOutName!="") {
+      // KLUDGE: assume one system
+      DivROMExportOptions exportOpt = DIV_ROM_ABSTRACT;
+      switch (e.song.system[0]) {
+        case DIV_SYSTEM_AMIGA:
+          exportOpt = DIV_ROM_AMIGA_VALIDATION;
+          break;
+        case DIV_SYSTEM_TIA:
+          exportOpt = DIV_ROM_ATARI_2600;
+          break;
+      };
+      logD("building ROM for %s", e.getSystemName(e.song.system[0]));
+      std::vector<DivROMExportOutput> out=e.buildROM(exportOpt);
+      if (romOutName[romOutName.size()-1]!=DIR_SEPARATOR) romOutName+=DIR_SEPARATOR_STR;
+      logD("export ROM %s", romOutName);
+      for (DivROMExportOutput& i: out) {
+        logD(" - %s", i.name);
+        String path=romOutName+i.name;
+        FILE* outFile=ps_fopen(path.c_str(),"wb");
+        if (outFile!=NULL) {
+          fwrite(i.data->getFinalBuf(),1,i.data->size(),outFile);
+          fclose(outFile);
+        } else {
+          reportError(fmt::sprintf("could not open file! (%s)",e.getLastError()));
+        }
+        i.data->finish();
+        delete i.data;
       }
     }
     if (outName!="") {

@@ -21,6 +21,7 @@
 
 #include "export/amigaValidation.h"
 #include "export/sapr.h"
+#include "export/atari2600Export.h"
 #include "export/tiuna.h"
 #include "export/zsm.h"
 
@@ -38,6 +39,9 @@ DivROMExport* DivEngine::buildROM(DivROMExportOptions sys) {
       break;
     case DIV_ROM_SAP_R:
       exporter=new DivExportSAPR;
+      break;
+    case DIV_ROM_ATARI_2600:
+      exporter=new DivExportAtari2600;
       break;
     default:
       exporter=new DivROMExport;
