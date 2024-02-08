@@ -58,6 +58,8 @@ void captureSequence(
   while (!done && e->isPlaying()) {
     
     done = e->nextTick(false, true);
+    if (done) break;
+    
     int currentTicks = e->getTotalTicks();
     int currentSeconds = e->getTotalSeconds();
     deltaTicks = 

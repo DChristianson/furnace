@@ -28,6 +28,7 @@ class DivExportAtari2600 : public DivROMExport {
   void writeWaveformHeader(SafeWriter* w, const char* key);
   size_t writeTextGraphics(SafeWriter* w, const char* value);
   size_t writeNote(SafeWriter* w, const ChannelState& next, const char duration, const ChannelState& last);
+  void writeNoteBinary(SafeWriter* w, const ChannelState& next, const char duration, const ChannelState& last);
 
   void writeTrackV0(
     DivEngine* e, 

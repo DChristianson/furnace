@@ -23,7 +23,7 @@
 #include "../engine.h"
 
 const int TICKS_PER_SECOND = 1000000;
-const int TICKS_AT_60HZ = TICKS_PER_SECOND / 60;
+const int TICKS_AT_60HZ = TICKS_PER_SECOND / 58;
 
 struct PatternIndex {
   String key;
