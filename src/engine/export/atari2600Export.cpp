@@ -478,6 +478,11 @@ size_t DivExportAtari2600::writeNote(SafeWriter* w, const ChannelState& next, co
   size_t bytesWritten = 0;
   unsigned char dmod = 0; // if duration is small, store in top bits of frequency
 
+  if (duration == 0) {
+      logD("0 duration note");
+  }
+  const char framecount = duration > 0 ? duration - 1 : 0; // BUGBUG: when duration is zero... we force to 1...
+
   unsigned char audfx, audcx, audvx;
   int cc, fc, vc;
   audcx = next.registers[0];
@@ -489,12 +494,9 @@ size_t DivExportAtari2600::writeNote(SafeWriter* w, const ChannelState& next, co
   
   w->writeText(fmt::sprintf("    ;F%d C%d V%d D%d\n", audfx, audcx, audvx, duration));
 
-  if ( ((cc + fc + vc) == 1) && duration < 3) {
+  if ( ((cc + fc + vc) == 1) && framecount < 3) {
     // write a delta row - only change one register
-    if (duration == 0) {
-        logD("0 duration note");
-    }
-    dmod = duration > 0 ? duration - 1 : 1; // BUGBUG: when duration is zero... we force to 1...
+    dmod = framecount; 
     unsigned char rx;
     if (fc > 0) {
       // frequency
@@ -511,9 +513,9 @@ size_t DivExportAtari2600::writeNote(SafeWriter* w, const ChannelState& next, co
 
   } else {
     // write all registers
-    if (duration < 3) {
+    if (framecount < 3) {
       // short duration
-      dmod = duration;
+      dmod = framecount;
     } else {
       dmod = 3;
     }
@@ -521,7 +523,7 @@ size_t DivExportAtari2600::writeNote(SafeWriter* w, const ChannelState& next, co
     unsigned char x = audfx << 3 | dmod << 1;
     w->writeText(fmt::sprintf("    byte %d", x));
     if (dmod == 3) {
-      w->writeText(fmt::sprintf(",%d", duration));
+      w->writeText(fmt::sprintf(",%d", framecount));
       bytesWritten += 1;
     }
     // waveform and volume
