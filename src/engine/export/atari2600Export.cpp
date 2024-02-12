@@ -52,12 +52,12 @@ std::vector<DivROMExportOutput> DivExportAtari2600::go(DivEngine* e) {
   captureSequence(e, 0, 0, DIV_SYSTEM_TIA, channel0AddressMap, channelSequences[0], registerDumps);
   captureSequence(e, 0, 1, DIV_SYSTEM_TIA, channel1AddressMap, channelSequences[1], registerDumps);
 
-  // scrunch the register dumps
+  // scrunch the register dumps with 0 volume
   for (auto& x: registerDumps) {
       for (auto& y: x.second.intervals) {
-        logD("checking 0 interval %s %d %d %d", x.first, y.state.registers[0], y.state.registers[1], y.state.registers[2]);
+        logD("checking 0 volume interval %s %d %d %d %d", x.first, y.state.registers[0], y.state.registers[1], y.state.registers[2], y.duration);
         if (0 == y.state.registers[2]) {
-          logD("found 0 interval");
+          logD("found 0 volume interval");
           y.state.registers[0] = 0;
           y.state.registers[1] = 0;
         }
@@ -494,7 +494,7 @@ size_t DivExportAtari2600::writeNote(SafeWriter* w, const ChannelState& next, co
   
   w->writeText(fmt::sprintf("    ;F%d C%d V%d D%d\n", audfx, audcx, audvx, duration));
 
-  if ( ((cc + fc + vc) == 1) && framecount < 3) {
+  if ( ((cc + fc + vc) == 1) && framecount < 2) {
     // write a delta row - only change one register
     dmod = framecount; 
     unsigned char rx;
@@ -513,16 +513,16 @@ size_t DivExportAtari2600::writeNote(SafeWriter* w, const ChannelState& next, co
 
   } else {
     // write all registers
-    if (framecount < 3) {
+    if (framecount < 2) {
       // short duration
-      dmod = framecount;
+      dmod = framecount << 1 | 0x01; // BUGBUG: complicated format
     } else {
-      dmod = 3;
+      dmod = 0x02;
     }
     // frequency
     unsigned char x = audfx << 3 | dmod << 1;
     w->writeText(fmt::sprintf("    byte %d", x));
-    if (dmod == 3) {
+    if (dmod == 0x02) {
       w->writeText(fmt::sprintf(",%d", framecount));
       bytesWritten += 1;
     }

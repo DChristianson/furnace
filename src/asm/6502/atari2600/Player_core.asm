@@ -74,7 +74,7 @@ _set_vx
             sta audio_vx,x
 _set_timer_delta
             lda #0
-            adc #1                     ; will be 1 or 2 based on carry bit
+            adc #0                     ; will be 0 or 1 based on carry bit
             sta audio_timer,x
             jmp _audio_advance_waveform
 _set_registers
@@ -86,8 +86,8 @@ _set_registers
             iny
             pla                      
             and #$03
-            cmp #$03                   
-            bne _set_timer_registers
+            lsr
+            bcs _set_timer_registers
             lda (audio_waveform_ptr),y
             iny
 _set_timer_registers
