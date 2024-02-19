@@ -45,12 +45,49 @@ std::map<unsigned int, unsigned int> channel1AddressMap = {
 std::vector<DivROMExportOutput> DivExportAtari2600::go(DivEngine* e) {
   std::vector<DivROMExportOutput> ret;
 
+  // get register dump
+  std::vector<RegisterWrite> registerWrites;
+  registerDump(e, 0, registerWrites);
+  logD("writing register dump");
+  SafeWriter* dump =new SafeWriter;
+  dump->init();
+  for (auto &write : registerWrites) {
+    dump->writeText(fmt::sprintf("%d %d %d:SS%d ORD%d ROW%d SYS%d> %d = %d\n",
+      write.nextTickCount,
+      write.seconds,
+      write.ticks,
+      write.rowIndex.subsong,
+      write.rowIndex.ord,
+      write.rowIndex.row,
+      write.systemIndex,
+      write.addr,
+      write.val
+    ));
+  }
+  ret.push_back(DivROMExportOutput("Track_dump.txt", dump));
+
   // capture all sequences
   logD("performing sequence capture");
   std::vector<String> channelSequences[2];
   std::map<String, DumpSequence> registerDumps;
   captureSequence(e, 0, 0, DIV_SYSTEM_TIA, channel0AddressMap, channelSequences[0], registerDumps);
   captureSequence(e, 0, 1, DIV_SYSTEM_TIA, channel1AddressMap, channelSequences[1], registerDumps);
+
+  int uniqueValues[3];
+  int valueFreq[3][256];
+  memset(uniqueValues, 0, 3 * sizeof(int));
+  memset(valueFreq, 0, 3 * 256 * sizeof(int));
+  for (auto& x: registerDumps) {
+    for (auto& y: x.second.intervals) {
+      for (int i = 0; i < 3; i++) {
+        if (0 == valueFreq[i][y.state.registers[i]]) {
+          uniqueValues[i]++;
+        }
+        valueFreq[i][y.state.registers[i]] += 1;
+      }
+    }
+  }
+  logD("regFreq %d %d %d", uniqueValues[0], uniqueValues[1], uniqueValues[2]);
 
   // scrunch the register dumps with 0 volume
   for (auto& x: registerDumps) {
@@ -75,12 +112,6 @@ std::vector<DivROMExportOutput> DivExportAtari2600::go(DivEngine* e) {
     frequencyMap,
     representativeMap);
 
-  writeTrackV0(
-    e,
-    channelSequences,
-    registerDumps,
-    ret
-  );
   writeTrackV1(
     e,
     commonDumpSequences,
@@ -118,131 +149,6 @@ std::vector<DivROMExportOutput> DivExportAtari2600::go(DivEngine* e) {
 
 }
 
-void DivExportAtari2600::writeTrackV0(
-  DivEngine* e,
-  std::vector<String> *channelSequences,
-  std::map<String, DumpSequence> &registerDumps,
-  std::vector<DivROMExportOutput> &ret
-) {
-
-  // logD("writing raw binary audio data");
-  // SafeWriter* binaryData=new SafeWriter;
-  // binaryData->init();
-  // ChannelState last(255);
-  // for (int i = 0; i < 2; i++) {
-  //   for (auto x : channelSequences[i]) {
-  //     auto& dump = registerDumps.at(x);
-  //     for (auto& n: dump.intervals) {
-  //       writeNoteBinary(binaryData, n.state, n.duration, last);
-  //       last = n.state;
-  //     }
-  //   }
-  // }
-  // ret.push_back(DivROMExportOutput("Track_binary.bin", binaryData));
-
-  logD("writing raw audio data");
-  SafeWriter* rawData=new SafeWriter;
-  rawData->init();
-  for (int i = 0; i < 2; i++) {
-    unsigned char lastfx, lastvx, lastcx;
-    int duration = 0;
-    int note = 0;
-    int track = 0;
-    for (auto& x : channelSequences[i]) {
-      if (0 == note) {
-        rawData->writeText("    byte 0\n");
-        rawData->writeText(fmt::sprintf("TRACK_TITLE_%d_C0%d = . - AUDIO_TRACKS\n", track, i));
-        track = track + 1;
-      }
-      rawData->writeText(fmt::sprintf("%s\n", x.c_str()));
-      auto& dump = registerDumps.at(x);
-      for (auto& n : dump.intervals) {
-
-        //  Write note data. Format:
-        // 
-        //   00000000                    stop 
-        //   ddddddd1                    pause + duration
-        //   fffff010                    frequency, duration 1
-        //   fffff100                    frequency, duration 2
-        //   fffff110 wwwwdddd           frequency + waveform + duration d
-
-        unsigned char audcx, audfx, audvx;
-        int ac, fc, vc;
-        audcx = n.state.registers[0];
-        ac = audcx != lastcx;
-        audfx = n.state.registers[1];
-        fc = audfx != lastfx;
-        audvx = n.state.registers[2];
-        vc = audvx != lastvx;
-        
-        if ((0 == note) || ac || fc || vc) {
-          while (duration > 0) {
-            unsigned char dx = duration;
-            // BUGBUG: make sure duration < 16
-            unsigned char rx, ex;
-            if (lastvx == 0) {
-              if (dx > 127) {
-                dx = 127;
-              }
-              rawData->writeText(fmt::sprintf("    ; PAUSE, D:%d\n", dx));
-              rx = dx << 1 | 0x01;
-              rawData->writeText(fmt::sprintf("    byte %d\n", rx));
-            } else if (ac || fc || duration > 2) {
-              if (dx > 31) {
-                dx = 31; // BUGBUG: KLUDGE
-              }
-              rawData->writeText(fmt::sprintf("    ; CX:%d, FX:%d, VX:%d, D:%d\n", lastcx, lastfx, lastvx, dx));
-              rx = lastfx << 3 | 0x06;
-              ex = lastcx << 4 | dx; // BUGBUG: KLUDGE
-              rawData->writeText(fmt::sprintf("    byte %d, %d\n", rx, ex));
-            } else {
-              rawData->writeText(fmt::sprintf("    ; CX:%d, FX:%d, VX:%d, D:%d\n", lastcx, lastfx, lastvx, dx));
-              rx = lastfx << 3 | (duration > 1 ? 0x40 : 0x20);
-              rawData->writeText(fmt::sprintf("    byte %d\n", rx));
-            }
-            duration = duration - dx;
-          }
-        }
-
-        lastcx = audcx;
-        lastfx = audfx;
-        lastvx = audvx;
-
-        duration += n.duration;
-      }
-      note = (note + 1) % 24;
-    }
-    while (duration > 0) {
-      unsigned char dx = duration;
-      // BUGBUG: make sure duration < 16
-      unsigned char rx, ex;
-      if (lastvx == 0) {
-        if (dx > 127) {
-          dx = 127;
-        }
-        rawData->writeText(fmt::sprintf("    ; PAUSE, D:%d\n", dx));
-        rx = dx << 1 | 0x01;
-        rawData->writeText(fmt::sprintf("    byte %d\n", rx));
-      } else if (duration > 2) {
-        if (dx > 31) {
-          dx = 31; // BUGBUG: KLUDGE
-        }
-        rawData->writeText(fmt::sprintf("    ; CX:%d, FX:%d, VX:%d, D:%d\n", lastcx, lastfx, lastvx, dx));
-        rx = lastfx << 3 | 0x06;
-        ex = lastcx << 4 | dx; // BUGBUG: KLUDGE
-        rawData->writeText(fmt::sprintf("    byte %d, %d\n", rx, ex));
-      } else {
-        rawData->writeText(fmt::sprintf("    ; CX:%d, FX:%d, VX:%d, D:%d\n", lastcx, lastfx, lastvx, dx));
-        rx = lastfx << 3 | (duration > 1 ? 0x40 : 0x20);
-        rawData->writeText(fmt::sprintf("    byte %d\n", rx));
-      }
-      duration = duration - dx;
-    }
-    rawData->writeText("    byte 0\n");
-  }
-  ret.push_back(DivROMExportOutput("Track_raw.asm", rawData));
-}
-
 void DivExportAtari2600::writeTrackV1(
   DivEngine* e, 
   std::map<uint64_t, String> &commonDumpSequences,
@@ -258,7 +164,6 @@ void DivExportAtari2600::writeTrackV1(
   trackData->init();
   trackData->writeText(fmt::sprintf("; Song: %s\n", e->song.name));
   trackData->writeText(fmt::sprintf("; Author: %s\n", e->song.author));
-
 
   // emit song table
   logD("writing song table");
@@ -377,9 +282,10 @@ void DivExportAtari2600::writeTrackV1(
     writeWaveformHeader(trackData, x.second.c_str());
     trackData->writeText(fmt::sprintf("; Hash %d, Freq %d\n", x.first, freq));
     auto& dump = registerDumps[x.second];
-    ChannelState last(255);
+    ChannelState last(dump.initialState);
+    trackData->writeText(fmt::sprintf("    ;F%d C%d V%d\n", last.registers[1], last.registers[0], last.registers[2]));
     for (auto& n: dump.intervals) {
-      waveformDataSize += writeNote(trackData, n.state, n.duration, last);
+      waveformDataSize += writeNoteF0(trackData, n.state, n.duration, last);
       last = n.state;
     }
     trackData->writeText("    byte 0\n");
@@ -457,15 +363,14 @@ void DivExportAtari2600::writeTrackV2(
   //   representativeMap
     // );
 
-
 }
 
 /**
- *  Write note data. Format:
+ *  Write note data. Format 0:
  * 
  *   fffff010 wwwwvvvv           frequency + waveform + volume, duration 1
- *   fffff100 wwwwvvvv           " " ", duration 2
- *   fffff110 dddddddd wwwwvvvv  " " ", duration d
+ *   fffff110 wwwwvvvv           " " ", duration 2
+ *   fffff100 dddddddd wwwwvvvv  " " ", duration d
  *   xxxx0001                    volume = x >> 4, duration 1 
  *   xxxx1001                    volume = x >> 4, duration 2
  *   xxxx0101                    wave = x >> 4, duration 1
@@ -474,7 +379,7 @@ void DivExportAtari2600::writeTrackV2(
  *   xxxxx111                    frequency = x >> 3, duration 2
  *   00000000                    stop
  */
-size_t DivExportAtari2600::writeNote(SafeWriter* w, const ChannelState& next, const char duration, const ChannelState& last) {
+size_t DivExportAtari2600::writeNoteF0(SafeWriter* w, const ChannelState& next, const char duration, const ChannelState& last) {
   size_t bytesWritten = 0;
   unsigned char dmod = 0; // if duration is small, store in top bits of frequency
 
@@ -537,57 +442,90 @@ size_t DivExportAtari2600::writeNote(SafeWriter* w, const ChannelState& next, co
 
 }
 
-void DivExportAtari2600::writeNoteBinary(SafeWriter* w, const ChannelState& next, const char duration, const ChannelState& last) {
+/** 
+ * 
+ *  Write note data. Format 1:
+ * 
+ * 00000000 stop/return
+ * 0000dddd pause,   15 >= d >= 1
+ * 0001dddd sustain, 15 >= d >= 1
+ * 0ddfffff wwwwvvvv, 3 >= d >= 1
+ * 100dffff f +- 8  , 2 >= d >= 1
+ * 101dwwww w       , 2 >= d >= 1
+ * 110dvvvv v       , 2 >= d >= 1
+ * 111xxxxx xxxxxxxx, dictionary lookup
+ * 
+ */
+size_t DivExportAtari2600::writeNoteF1(SafeWriter* w, const ChannelState& next, const char duration, const ChannelState& last) {
+  size_t bytesWritten = 0;
+
+    if (duration == 0) {
+      logD("0 duration note");
+  }
+
   unsigned char dmod = 0; // if duration is small, store in top bits of frequency
+  unsigned char framecount = duration > 0 ? duration : 1; 
 
   unsigned char audfx, audcx, audvx;
   int cc, fc, vc;
   audcx = next.registers[0];
   cc = audcx != last.registers[0];
   audfx = next.registers[1];
+  const char fmod = audfx - last.registers[1];
   fc = audfx != last.registers[1];
   audvx = next.registers[2];
   vc = audvx != last.registers[2];
   
+  w->writeText(fmt::sprintf("    ;%d %d %d\nc", last.registers[0], last.registers[1], last.registers[2]));
+  w->writeText(fmt::sprintf("    ;F%d C%d V%d D%d %d %d %d %d\n", audfx, audcx, audvx, duration, cc, fc, vc, fmod));
 
-  if ( ((cc + fc + vc) == 1) && duration < 3) {
+  if ( audvx == 0 ) {
+    // pause 
+    dmod = (framecount > 15) ? 15 : framecount;
+    w->writeText(fmt::sprintf("    byte %d; PAUSE\n", dmod));
+    bytesWritten += 1;
+
+  } else if ( ((cc + fc + vc) == 1) ) { // BUGBUG: && abs(fmod) <  8) {
     // write a delta row - only change one register
-    if (duration == 0) {
-        logD("0 duration note");
-    }
-    dmod = duration > 0 ? duration - 1 : 1; // BUGBUG: when duration is zero... we force to 1...
+    dmod = (framecount > 2) ? framecount - 1 : 1;
     unsigned char rx;
     if (fc > 0) {
       // frequency
-      rx = audfx << 3 | dmod << 2 | 0x03; //  d11
-    } else if (cc > 0 ) {
+      // BUGBUG: incorrect
+      rx = dmod << 4 | fmod | 0x80; // 100dffff 
+    } else if (cc > 0) {
       // waveform
-      rx = audcx << 3 | dmod << 3 | 0x05; // d101
+      rx = dmod << 4 | audcx | 0x90; // 101dwwww
     } else {
       // volume 
-      rx = audvx << 3 | dmod << 3 | 0x01; // d001
+      rx = dmod << 4 | audvx | 0xc0; //110dccc
     }
-    w->writeC(rx);
+    w->writeText(fmt::sprintf("    byte %d\n", rx));
+    bytesWritten += 1;
 
   } else {
     // write all registers
-    if (duration < 3) {
-      // short duration
-      dmod = duration;
-    } else {
-      dmod = 3;
-    }
+    dmod = framecount > 3 ? 3 : framecount;
     // frequency
-    unsigned char x = audfx << 3 | dmod << 1;
-    w->writeC(x);
-    if (dmod == 3) {
-      w->writeC(duration);
-    }
+    unsigned char x = dmod << 5 | audfx << 3;
+    w->writeText(fmt::sprintf("    byte %d", x));
+    bytesWritten += 1;
     // waveform and volume
     unsigned char y = (audcx << 4) + audvx;
-    w->writeC(y);
-
+    w->writeText(fmt::sprintf(",%d\n", y));
+    bytesWritten += 1;
   }
+
+  framecount = framecount - dmod;
+  while (framecount > 0) {
+    dmod = (framecount > 15) ? 15 : framecount;
+    framecount = framecount - dmod;
+    unsigned char sx = 0x10 | dmod;
+    w->writeText(fmt::sprintf("    byte %d; SUSTAIN\n", sx));
+    bytesWritten += 1;
+  }
+
+  return bytesWritten;
 }
 
 void DivExportAtari2600::writeWaveformHeader(SafeWriter* w, const char * key) {

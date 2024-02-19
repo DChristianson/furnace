@@ -95,6 +95,10 @@ struct ChannelState {
     memset(registers, c, 4);
   }
 
+  ChannelState(const ChannelState &c) {
+    memcpy(registers, c.registers, 4);
+  }
+
   bool write(unsigned int address, unsigned int value) {
     unsigned char v = (unsigned char)value;
     if (registers[address] == v) return false;
@@ -141,11 +145,15 @@ struct DumpInterval {
  */
 struct DumpSequence {
 
+  ChannelState initialState;
   std::vector<DumpInterval> intervals;
 
   void dumpRegisters(const ChannelState &state) {
     intervals.emplace_back(DumpInterval(state));
   }
+
+  DumpSequence() : initialState(255) {}
+  DumpSequence(const ChannelState &initialState) : initialState(initialState) {}
 
   int writeDuration(const int ticks, const int remainder, const int freq) {
     int total = ticks + remainder;
@@ -164,6 +172,8 @@ struct DumpSequence {
     const int m = 1e9 + 9;
     uint64_t pp = 1;
     uint64_t value = 0;
+    value = value + (initialState.hash() * pp) % m;
+    pp = (pp * p) % m;
     for (auto& x : intervals) {
       value = value + (x.hash() * pp) % m;
       pp = (pp * p) % m;
@@ -172,6 +182,49 @@ struct DumpSequence {
   }
 
 };
+
+struct RegisterWrite {
+
+  int nextTickCount;
+  RowIndex rowIndex;
+  int systemIndex;
+  DivSystem system;
+  int seconds;
+  int ticks;
+  int addr;
+  int val;
+
+  RegisterWrite(
+    int nextTickCount,
+    unsigned short subsong,
+    unsigned short ord,
+    unsigned short row,
+    int systemIndex,
+    DivSystem currentSystem,
+    int totalSeconds,
+    int totalTicks,
+    int addr,
+    int val
+  ):
+    nextTickCount(nextTickCount),
+    rowIndex(subsong, ord, row),
+    systemIndex(systemIndex),
+    system(currentSystem),
+    seconds(totalSeconds),
+    ticks(totalTicks),
+    addr(addr),
+    val(val) {}
+
+};
+
+/**
+ * Extract all register writes in a song for analysis.
+ */
+void registerDump(
+  DivEngine* e, 
+  int subsong,
+  std::vector<RegisterWrite> &writes
+);
 
 /**
  * Extract all register dump sequences in a song.

@@ -27,9 +27,17 @@ class DivExportAtari2600 : public DivROMExport {
   
   void writeWaveformHeader(SafeWriter* w, const char* key);
   size_t writeTextGraphics(SafeWriter* w, const char* value);
-  size_t writeNote(SafeWriter* w, const ChannelState& next, const char duration, const ChannelState& last);
-  void writeNoteBinary(SafeWriter* w, const ChannelState& next, const char duration, const ChannelState& last);
+  size_t writeNoteF0(SafeWriter* w, const ChannelState& next, const char duration, const ChannelState& last);
+  size_t writeNoteF1(SafeWriter* w, const ChannelState& next, const char duration, const ChannelState& last);
 
+  // frame by frame reg dump
+  // frame by frame column dump
+  // frame by frame column delta dump
+  // rle reg dump
+  // rle column dump
+  // rle column delta dump
+  
+  // straight custom reg dump
   void writeTrackV0(
     DivEngine* e, 
     std::vector<String> *channelSequences,
@@ -37,6 +45,7 @@ class DivExportAtari2600 : public DivROMExport {
     std::vector<DivROMExportOutput> &ret
   );
 
+  // song structure + custom reg + delta A (ROM)
   void writeTrackV1(
     DivEngine* e, 
     std::map<uint64_t, String> &commonDumpSequences,
@@ -46,6 +55,7 @@ class DivExportAtari2600 : public DivROMExport {
     std::vector<DivROMExportOutput> &ret
   );
 
+  // custom reg + delta B (ROM)
   void writeTrackV2(
     DivEngine* e, 
     std::map<uint64_t, String> &commonDumpSequences,
