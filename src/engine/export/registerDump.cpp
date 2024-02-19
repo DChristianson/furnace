@@ -19,6 +19,56 @@
 
 #include "registerDump.h"
 
+void registerDump(
+  DivEngine* e, 
+  int subsong,
+  std::vector<RegisterWrite> &writes
+) {
+ for (int i=0; i<e->song.systemLen; i++) {
+    e->getDispatch(i)->toggleRegisterDump(true);
+  }
+  e->changeSongP(subsong);
+  e->stop();
+  e->setRepeatPattern(false);
+  e->setOrder(0);
+  e->play();
+  int nextTickCount = -1;
+  bool done=false;
+  while (!done && e->isPlaying()) {
+    
+    done = e->nextTick(false, true);
+    if (done) break;
+    nextTickCount += 1;
+    // get register writes
+    for (int i=0; i<e->song.systemLen; i++) {
+      std::vector<DivRegWrite>& registerWrites=e->getDispatch(i)->getRegisterWrites();
+      DivSystem system = e->song.system[i];
+      for (DivRegWrite& registerWrite: registerWrites) {
+        writes.emplace_back (
+          RegisterWrite(
+            nextTickCount,
+            e->getCurrentSubSong(),
+            e->getOrder(),
+            e->getRow(),
+            i,
+            system,
+            e->getTotalSeconds(),
+            e->getTotalTicks(),
+            registerWrite.addr,
+            registerWrite.val
+          )
+        );
+      }
+      registerWrites.clear();
+    }
+
+  }
+  for (int i=0; i<e->song.systemLen; i++) {
+    e->getDispatch(i)->toggleRegisterDump(false);
+  }
+
+}
+
 void captureSequence(
   DivEngine* e, 
   int subsong,
@@ -47,12 +97,12 @@ void captureSequence(
 
   RowIndex curRowIndex(e->getCurrentSubSong(), e->getOrder(), e->getRow());
 
+  ChannelState currentState(0);
   String key = getSequenceKey(curRowIndex.subsong, curRowIndex.ord, curRowIndex.row, channel);
   sequence.emplace_back(key);
   auto it = registerDumps.emplace(key, DumpSequence());
   DumpSequence *currentDumpSequence = &(it.first->second);
 
-  ChannelState currentState(0);
 
   bool done=false;
   while (!done && e->isPlaying()) {
@@ -102,7 +152,7 @@ void captureSequence(
       registerWrites.clear();
     }
 
-    if (isDirty) {
+    if (isDirty || (currentDumpSequence->size() == 0)) {
       // end last seq
       if (needsWriteDuration) {
         deltaTicksR = currentDumpSequence->writeDuration(deltaTicks, deltaTicksR, TICKS_AT_60HZ);
@@ -390,7 +440,7 @@ void testCompress(SuffixTree *root, const std::vector<AlphaChar> &alphaSequence)
 
   // brute force test compress
   std::vector<int> compressos;
-  for (auto x : alphaSequence) {
+  for (auto x : alphaSequence) { // BUGBUG: unused
     compressos.emplace_back(0);
   }
   std::vector<int> packed;

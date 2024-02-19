@@ -67,7 +67,8 @@ _audio_next_note
             lsr                        ; pull duration bit for later set
             sta audio_fx,x             ; store frequency
             jmp _set_timer_delta       ; jump to duration 
-_set_cx_vx  bcc _set_vx
+_set_cx_vx  lsr
+            bcc _set_vx
             sta audio_cx,x
             jmp _set_timer_delta       ; jump to duration
 _set_vx
