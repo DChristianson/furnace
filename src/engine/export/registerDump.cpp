@@ -34,6 +34,7 @@ void registerDump(
   e->play();
   int nextTickCount = -1;
   bool done=false;
+  std::map<int, int> currentRegisterValue;
   while (!done && e->isPlaying()) {
     
     done = e->nextTick(false, true);
@@ -337,6 +338,70 @@ AlphaChar SuffixTree::gather_left(std::vector<SuffixTree *> &nodes, const std::v
   return leftChar;
 }
 
+/**
+ * Compare by start
+ */ 
+bool compareStart(SuffixTree * a, SuffixTree * b) {
+  return a->start < b->start;
+}
+
+/**
+ * Compare by score
+ */ 
+bool compareScore(Span a, Span b) {
+  return a.score > b.score;
+}
+
+void SuffixTree::gather_repeated_subsequences(
+  const std::vector<AlphaChar> &alphaSequence,
+  std::vector<Span> &uniqueSubsequences,
+  std::vector<Span> &copySequence
+) {
+  // initialize 
+  for (int i = 0; i < alphaSequence.size(); i++) {
+    copySequence.emplace_back(Span(i, 1, 1));
+  }
+  // find maximal repeats
+  const size_t minRepeatDepth = 2;
+  std::vector<SuffixTree *> maximalRepeats;
+  this->gather_left(maximalRepeats, alphaSequence);
+  for (auto x : maximalRepeats) {
+    if (x->depth < minRepeatDepth) {
+      continue;
+    }
+    std::vector<SuffixTree *> leaves;
+    x->gather_leaves(leaves);
+    std::sort(leaves.begin(), leaves.end(), compareStart);
+    // find non-overlapping repeats
+    size_t repeats = 0;
+    for (size_t i = 0, lastEnd = 0; i < leaves.size(); i++) {
+      auto l = leaves[i];
+      if (l->start < lastEnd) {
+        leaves[i] = (SuffixTree *)NULL;
+        continue;
+      }
+      lastEnd = l->start + x->depth;
+      repeats++;
+    }
+    size_t firstCopyStart = leaves[0]->start;
+    size_t length = x->depth;
+    size_t score = length * repeats * 2;
+    size_t overhead = repeats * 2 + 1;
+    if (overhead > score) {
+      continue; // not worth it
+    }
+    uniqueSubsequences.emplace_back(Span(firstCopyStart, length, score));
+    for (auto l : leaves) {
+      if (NULL == l || score <= copySequence[l->start].score) {
+        continue;
+      }
+      copySequence[l->start] = Span(firstCopyStart, length, score);
+    }
+  }
+
+  // BUGBUG: remove overlaps
+
+}
 
 void createAlphabet(
   const std::map<AlphaCode, String> &commonDumpSequences,
@@ -369,6 +434,23 @@ void translateString(
     alphaSequence.emplace_back(0);
 }
 
+void createAlphabet(
+  const std::map<AlphaCode, unsigned int> &frequencyMap,
+  std::vector<AlphaCode> &alphabet,
+  std::map<AlphaCode, AlphaChar> &index
+) {
+  // assert: 0 only once at end of sequence
+  alphabet.reserve(frequencyMap.size());
+  index.emplace(0, 0);
+  alphabet.emplace_back(0);
+  for (auto x : frequencyMap) {
+    if (0 == x.first) {
+      continue;
+    }
+    index.emplace(x.first, alphabet.size());
+    alphabet.emplace_back(x.first);
+  }
+}
 
 // build a suffix tree via McCreight's algorithm
 // https://www.cs.helsinki.fi/u/tpkarkka/opetus/13s/spa/lecture09-2x4.pdf
@@ -416,73 +498,6 @@ SuffixTree * createSuffixTree(
   // produce root 
   return root;
 
-}
-
-
-bool moarcompress(std::pair<SuffixTree *, int> a, std::pair<SuffixTree *, int> b) {
-  return a.second > b.second;
-}
-
-void testCompress(SuffixTree *root, const std::vector<AlphaChar> &alphaSequence) {
-
-    // maximal repeats
-  std::vector<SuffixTree *> repeats;
-  root->gather_left(repeats, alphaSequence);
-  std::vector<std::pair<SuffixTree *, size_t>> repeatfreq;
-  for (auto x : repeats) {
-    std::vector<SuffixTree *> leaves;
-    x->gather_leaves(leaves);
-    size_t score = (x->depth - 1) * leaves.size();
-    repeatfreq.emplace_back(std::pair<SuffixTree *, size_t>(x, score));
-  }
-  // sort by freq
-  std::sort(repeatfreq.begin(), repeatfreq.end(), moarcompress);
-
-  // brute force test compress
-  std::vector<int> compressos;
-  for (auto x : alphaSequence) { // BUGBUG: unused
-    compressos.emplace_back(0);
-  }
-  std::vector<int> packed;
-  for (int level = 1; level < 20; level++) {
-    for (auto x : repeatfreq) {
-      if (x.second < 1) continue;
-      std::vector<SuffixTree *> leaves;
-      x.first->gather_leaves(leaves);
-      std::vector<SuffixTree *> cleared;
-      packed = compressos;
-      for (auto y : leaves) {
-        bool clear = true;
-        for (size_t i = 0 ; i < x.first->depth; i++) {
-          if (packed.at(y->start + i) < 0 || packed.at(y->start + i) == level) {
-            clear = false;
-            break;
-          }
-        }
-        if (clear) {
-          cleared.push_back(y);
-          for (size_t i = 0 ; i < x.first->depth; i++) {
-            packed[y->start + i] = level;
-          }
-        }
-      }
-      if (cleared.size() < 2) continue;
-      bool first = true;
-      for (auto z : cleared) {
-        for (size_t i = 0 ; i < x.first->depth; i++) {
-          compressos[z->start + i] = first ? level : -level;
-        }
-        if (first) {
-          first = false;
-        }
-      }
-    }
-  }
-  size_t bytes = 0;
-  for (auto x : compressos) {
-    if (x >= 0) bytes++;
-  }
-  logD("test compress: %d >> %d", alphaSequence.size(), bytes);
 }
 
 void testCommonSubsequences(const String &input) {
@@ -537,52 +552,6 @@ void testCommonSubsequences(const String &input) {
     logD("%s%s (%d)", indent, label, u->start);
   }
 
-  // maximal common substring
-  SuffixTree *maximal = root->find_maximal_substring();
-  logD("maximal substring: %s", input.substr(maximal->start, maximal->depth));
-
-  // brute force frequency analysis
-  for (size_t i = 0; i < input.size() - 1; i++) {
-    for (size_t j = i + 2; j <= input.size(); j++) {
-      std::vector<AlphaChar> key(alphaSequence.begin() + i, alphaSequence.begin() + j);
-      auto label = input.substr(i, j - i);
-      SuffixTree * u = root->find(key, alphaSequence);
-      if (NULL != u) {
-        std::vector<SuffixTree *> leaves;
-        u->gather_leaves(leaves);
-        if (leaves.size() > 1) {
-          logD("substring: %s found", label);
-          for (auto x : leaves) {
-            logD("  ...start at %d", x->start);
-          }
-        }
-      } else {
-        logD("substring: %s not found", label);
-      }
-    }
-  }
 }
 
 
-void testCommonSubsequencesBrute(const String &input) {
-  std::map<String, int> substrings;
-  int ops = 0;
-  for (size_t i = 0; i < input.size() - 1; i++) {
-    for (size_t j = i + 2; j <= input.size(); j++) {
-      size_t len = j - i;
-      auto key = input.substr(i, len);
-      ops++;
-      auto it = substrings.find(key);
-      if (it == substrings.end()) {
-        substrings.emplace(key, 1);
-      } else {
-        it->second += 1;
-      }
-    }
-  }
-  for (auto x : substrings) {
-    if (x.second == 1) continue;
-    logD("substring: %s -> %d", x.first, x.second);
-  }
-  logD("brute ops: %d", ops);
-}
