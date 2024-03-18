@@ -22,31 +22,45 @@
 
 #include "../engine.h"
 #include "registerDump.h"
+#include <bitset>
+
+const size_t NUM_TIA_REGISTERS = 6;
+
+typedef std::bitset<NUM_TIA_REGISTERS> TiaRegisterMask;
+
+const unsigned char DEFAULT_STACK_DEPTH  = 2;
+const unsigned char DEFAULT_LITERAL_DICTIONARY_SIZE = 128;
+const unsigned char DEFAULT_SEQUENCE_DICTIONARY_SIZE = 64;
+
 
 class DivExportAtari2600 : public DivROMExport {
   
   void writeWaveformHeader(SafeWriter* w, const char* key);
+
+  size_t stackDepth = DEFAULT_STACK_DEPTH;
+  size_t literalDictionarySize = DEFAULT_LITERAL_DICTIONARY_SIZE;
+  size_t sequenceDictionarySize = DEFAULT_SEQUENCE_DICTIONARY_SIZE;
+
   size_t writeTextGraphics(SafeWriter* w, const char* value);
   size_t writeNoteF0(SafeWriter* w, const ChannelState& next, const char duration, const ChannelState& last);
   size_t writeNoteF1(SafeWriter* w, const ChannelState& next, const char duration, const ChannelState& last);
+  
+  void writeAlphaCodesToChannel(
+    int channel,
+    const TiaRegisterMask &registerMask,
+    int *values,
+    int framesToWrite,
+    std::vector<AlphaCode> &codeSequence
+  ); 
 
   // frame by frame reg dump
   // frame by frame column dump
   // frame by frame column delta dump
   // rle reg dump
-  // rle column dump
   // rle column delta dump
   
-  // straight custom reg dump
-  void writeTrackV0(
-    DivEngine* e, 
-    std::vector<String> *channelSequences,
-    std::map<String, DumpSequence> &registerDumps,
-    std::vector<DivROMExportOutput> &ret
-  );
-
   // song structure + custom reg + delta A (ROM)
-  void writeTrackV1(
+  void writeTrackDataV1(
     DivEngine* e, 
     std::map<uint64_t, String> &commonDumpSequences,
     std::map<uint64_t, unsigned int> &frequencyMap,
@@ -55,15 +69,23 @@ class DivExportAtari2600 : public DivROMExport {
     std::vector<DivROMExportOutput> &ret
   );
 
-  // custom reg + delta B (ROM)
-  void writeTrackV2(
+  // run length encoded register dump
+  void writeTrackData(
     DivEngine* e, 
-    std::map<uint64_t, String> &commonDumpSequences,
-    std::map<String, String> &representativeMap,
-    std::vector<String> *channelSequences,
-    std::map<String, DumpSequence> &registerDumps,
+    std::vector<RegisterWrite> &registerWrites,
     std::vector<DivROMExportOutput> &ret
   );
+
+  size_t encodeSpan(
+    const std::vector<AlphaCode> sequence, 
+    const Span &bounds,
+    const std::vector<Span> &copySequence,
+    const bool recurse);
+
+  size_t writeAlphaCode(AlphaCode code);
+  size_t writeSpanReference(const size_t start, const size_t length);
+  size_t writeSpanLabel(const Span &span);
+  size_t writePop();
 
 public:
 

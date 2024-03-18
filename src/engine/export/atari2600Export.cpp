@@ -42,6 +42,15 @@ std::map<unsigned int, unsigned int> channel1AddressMap = {
   {AUDV1, 2},
 };
 
+const char* TiaRegisterNames[] = {
+  "AUDC0",
+  "AUDC1",
+  "AUDF0",
+  "AUDF1",
+  "AUDV0",
+  "AUDV1"
+};
+
 std::vector<DivROMExportOutput> DivExportAtari2600::go(DivEngine* e) {
   std::vector<DivROMExportOutput> ret;
 
@@ -112,7 +121,7 @@ std::vector<DivROMExportOutput> DivExportAtari2600::go(DivEngine* e) {
     frequencyMap,
     representativeMap);
 
-  writeTrackV1(
+  writeTrackDataV1(
     e,
     commonDumpSequences,
     frequencyMap,
@@ -120,15 +129,16 @@ std::vector<DivROMExportOutput> DivExportAtari2600::go(DivEngine* e) {
     registerDumps,
     ret
   );
-  writeTrackV2(
+  writeTrackData(
     e,
-    commonDumpSequences,
-    representativeMap,
-    channelSequences,
-    registerDumps,
+    registerWrites,
     ret
   );
-
+  // writeTrackDataV3(
+  //   e,
+  //   registerWrites,
+  //   ret
+  // );
 
   // create meta data (optional)
   logD("writing track title graphics");
@@ -149,7 +159,7 @@ std::vector<DivROMExportOutput> DivExportAtari2600::go(DivEngine* e) {
 
 }
 
-void DivExportAtari2600::writeTrackV1(
+void DivExportAtari2600::writeTrackDataV1(
   DivEngine* e, 
   std::map<uint64_t, String> &commonDumpSequences,
   std::map<uint64_t, unsigned int> &frequencyMap,
@@ -309,61 +319,332 @@ void DivExportAtari2600::writeTrackV1(
 
 }
 
-void DivExportAtari2600::writeTrackV2(
+/** 
+ * Write track data 
+ * 
+ * Stream data format:
+ * 
+ * 00000000 stop
+ * 000ddddd sustain for d, 31 >= d >= 1
+ * rrrxxxxx r <- x, 6 >= r >= 1, 31 >= x >= 0
+ * 
+ * 0000cccc 0000dddd 000fffff 000ggggg 0000vvvv 0000wwww
+ * 
+ */
+void DivExportAtari2600::writeTrackData(
   DivEngine* e, 
-  std::map<uint64_t, String> &commonDumpSequences,
-  std::map<String, String> &representativeMap,
-  std::vector<String> *channelSequences,
-  std::map<String, DumpSequence> &registerDumps,
+  std::vector<RegisterWrite> &registerWrites,
   std::vector<DivROMExportOutput> &ret
 ) {
-  // TODO: principled raw sequence
+
+
+  // encode command streams
+  std::vector<AlphaCode> codeSequences[e->song.subsong.size()][2];
+  for (size_t song = 0; song < e->song.subsong.size(); song++) {
+    for (int channel = 0; channel < 2; channel += 1) {
+      int pendingRegisters[NUM_TIA_REGISTERS];
+      int currentRegisters[NUM_TIA_REGISTERS];
+      memset(currentRegisters, 0, NUM_TIA_REGISTERS * sizeof(int)); 
+      memset(pendingRegisters, 0, NUM_TIA_REGISTERS * sizeof(int));
+      int lastCommandTicks = 0;
+      int lastCommandSeconds = 0;
+      int ticksSinceLastWrite = 0;
+      int commandCount = 0;
+      for (auto &write : registerWrites) {
+        // get address
+        const int r = write.addr - AUDC0;
+        if ((r < 0) || (r > AUDV1) || ((r % 2) != channel)) {
+          continue;
+        }
+
+        // get delta since last iteration
+        const int deltaTicks = 0 == commandCount ? 0 : (
+          write.ticks - lastCommandTicks + 
+          (TICKS_PER_SECOND * (write.seconds - lastCommandSeconds))
+        );
+        lastCommandSeconds = write.seconds;
+        lastCommandTicks = write.ticks;
+        commandCount++;
+        
+        ticksSinceLastWrite += deltaTicks;
+        const int framesToWrite = ticksSinceLastWrite / TICKS_AT_60HZ;
+        
+        if (framesToWrite > 0) {
+          TiaRegisterMask registerMask;
+          for (size_t i = channel; i < NUM_TIA_REGISTERS; i += 2) {
+            if (pendingRegisters[i] != currentRegisters[i]) {
+              registerMask[i] = 1;
+            }
+          }
+          if (registerMask.any()) {
+            // changed frame time
+            writeAlphaCodesToChannel(
+              channel,
+              registerMask,
+              pendingRegisters,
+              framesToWrite,
+              codeSequences[song][channel]);
+            memcpy(currentRegisters, pendingRegisters, NUM_TIA_REGISTERS * sizeof(int));
+            ticksSinceLastWrite = ticksSinceLastWrite - (framesToWrite * TICKS_AT_60HZ);
+          }
+        }
+        // update register value
+        pendingRegisters[r] = write.val;
+      }
+      // BUGBUG: end of song delay?
+      const int framesToWrite = ticksSinceLastWrite / TICKS_AT_60HZ;
+      if (framesToWrite > 0) {
+        TiaRegisterMask registerMask;
+        for (size_t i = channel; i < NUM_TIA_REGISTERS; i += 2) {
+          if (pendingRegisters[i] != currentRegisters[i]) {
+            registerMask[i] = 1;
+          }
+        }
+        if (registerMask.any()) {
+          writeAlphaCodesToChannel(
+            channel,
+            registerMask,
+            pendingRegisters,
+            framesToWrite,
+            codeSequences[song][channel]);
+        }
+      }
+      codeSequences[song][channel].emplace_back(0);
+    }
+  }
+
+  // create a frequency map of all codes
+  std::map<AlphaCode, unsigned int> frequencyMap;
+  size_t codeSequenceTotalSize = 0;
+  for (size_t song = 0; song < e->song.subsong.size(); song++) {
+    for (int channel = 0; channel < 2; channel += 1) {
+      codeSequenceTotalSize += codeSequences[song][channel].size();
+      for (auto cx : codeSequences[song][channel]) {
+        frequencyMap[cx]++;
+      }
+    }
+  }
+
+  // index all codes into an alphabet
   std::vector<AlphaCode> alphabet;
-  std::map<String, AlphaChar> index;
+  std::map<AlphaCode, AlphaChar> index;
   createAlphabet(
-    commonDumpSequences,
+    frequencyMap,
     alphabet,
     index
   );
-  logD("Alphabet size %d", alphabet.size());
-
-  for (int i = 0; i < 2; i++) {
-    std::vector<AlphaChar> alphaSequence;
-    translateString(
-      channelSequences[i],
-      representativeMap,
-      index,
-      alphaSequence
-    );
-    logD("Sequence length %d", alphaSequence.size());
-
-    SuffixTree *root = createSuffixTree(
-      alphabet,
-      alphaSequence
-    );
-
-    // maximal common substring
-    SuffixTree *maximal = root->find_maximal_substring();
-    logD("maximal substring: %d (%d, %d)", maximal->depth, maximal->start, maximal->depth);
-    testCompress(root, alphaSequence);
-
-    delete root;
-
+    
+  // compute some basic stats
+  logD("alphabet size %d", alphabet.size());
+  for (auto a : alphabet) {
+    logD("  %08x -> %d", a, frequencyMap[a]);
   }
+  double entropy = 0;
+  const double symbolCount = codeSequenceTotalSize;
+  for (auto &x : frequencyMap) {
+    if (0 == x.first) {
+      continue;
+    }
+    const double p = ((double) x.second) / symbolCount;
+    const double logp = log2(p);
+    entropy = entropy - (p * logp);
+  }
+  const double expectedBits = entropy * symbolCount;
+  const double expectedBytes = expectedBits / 8;
+  logD("entropy: %lf (%lf bits / %lf bytes)", entropy, expectedBits, expectedBytes);
+
+  // compress sequences
+  for (size_t song = 0; song < e->song.subsong.size(); song++) {
+    for (int channel = 0; channel < 2; channel += 1) {
+      std::vector<AlphaChar> alphaSequence;
+      alphaSequence.reserve(codeSequences[song][channel].size());         
+
+      // copy string into alphabet
+      for (auto code : codeSequences[song][channel]) {
+        AlphaChar c = index.at(code);
+        alphaSequence.emplace_back(c);
+      }
+      // create suffix tree 
+      SuffixTree *root = createSuffixTree(
+        alphabet,
+        alphaSequence
+      );
+
+      // find maximal repeats
+      std::vector<Span> repeats;
+      std::vector<Span> copySequence;
+      root->gather_repeated_subsequences(alphaSequence, repeats, copySequence);
+
+      delete root;
+
+      const size_t encodingSize = encodeSpan(
+        codeSequences[song][channel], 
+        Span(0, alphaSequence.size(), 1),
+        copySequence, true);
+
+      logD("sequence estimated size: %d", encodingSize);
+
+    }
+  }
+
+  // write literal dictionary
+  if (this->literalDictionarySize > 0) { 
+    SafeWriter* literals =new SafeWriter;
+    literals->init();
+
+    std::vector<std::pair<AlphaCode, size_t>> literalFreq;
+    std::map<AlphaCode, size_t> literalDictionary;
+    for (auto &x : frequencyMap) {
+      // BUGBUG: only write 
+      if ((x.first >> 24) != 7) continue; // BUGBUG magic detection of 2-byte codes
+      if (x.second < 2) continue; // BUGBUG: 
+      literalFreq.emplace_back(x);
+    }
+    // sort by freq
+    std::sort(literalFreq.begin(), literalFreq.end(), compareSecond<AlphaCode, size_t>);
+    for (size_t i = 0; i < this->literalDictionarySize && i < literalFreq.size(); i++) {
+      literalDictionary[literalFreq[i].first] = i;
+    }
+
+    // BUGBUG: output
+    ret.push_back(DivROMExportOutput("Track_literals.asm", literals));
+  }
+      
+
+  // get suffix tree
+
+  // start to write
+  // if repeat, put in address of start
+  // 
+  // if  literal sequence
+  // end literal
+  // inject repeats
+  //
 
   // BUGBUG: Not production 
   // just testing 
-  testCommonSubsequences("banana");
-  testCommonSubsequences("xabcyiiizabcqabcyr");
-  testCommonSubsequencesBrute("banana");
-  testCommonSubsequencesBrute("xabcyiiizabcqabcyr");
+//  testCommonSubsequences("banana");
+  testCommonSubsequences("abcdeabcdefghijfghijabcdexyxyxyx");
+ // testCommonSubsequences("xabcyiiizabcqabcyr");
+//  testCommonSubsequencesBrute("banana");
+//  testCommonSubsequencesBrute("xabcyiiizabcqabcyr");
   // findCommonSubSequences(
   //   channelSequences[0],
   //   commonDumpSequences,
   //   representativeMap
     // );
 
+
+  // create track data
+  logD("writing song audio data");
+  SafeWriter* songData=new SafeWriter;
+  songData->init();
+  songData->writeText(fmt::sprintf("; Song: %s\n", e->song.name));
+  songData->writeText(fmt::sprintf("; Author: %s\n", e->song.author));
+
+  // emit song table
+  logD("writing song table");
+  size_t songTableSize = 0;
+  songData->writeText("\n; Song Lookup Table\n");
+  songData->writeText(fmt::sprintf("NUM_SONGS = %d\n", e->song.subsong.size()));
+  songData->writeText("SONG_TABLE_START_LO\n");
+  for (size_t i = 0; i < e->song.subsong.size(); i++) {
+    songData->writeText(fmt::sprintf("    byte <SONG_%d_ADDR\n", i));
+    songTableSize++;
+  }
+  songData->writeText("SONG_TABLE_START_HI\n");
+  for (size_t i = 0; i < e->song.subsong.size(); i++) {
+    songData->writeText(fmt::sprintf("    byte >SONG_%d_ADDR\n", i));
+    songTableSize++;
+  }
+
+  // audio metadata
+  songData->writeC('\n');
+  songData->writeText(fmt::sprintf("; Song Table Size %d\n", songTableSize));
+  ret.push_back(DivROMExportOutput("Track_song_table.asm", songData));
+
 }
+
+/**
+ * @brief write a set of registers
+ * 
+ * @param channel 
+ * @param registerMask 
+ * @param values 
+ * @param framesToWrite 
+ * @param codeSequence 
+ */
+void DivExportAtari2600::writeAlphaCodesToChannel(
+  int channel,
+  const TiaRegisterMask &registerMask,
+  int *values,
+  int framesToWrite,
+  std::vector<AlphaCode> &codeSequence
+) {
+
+  // encode a register update as a 32 bit integer containing all the register updates for a single channel
+  // 0000cfv 0000cccc 000fffff 0000vvvv mask bits + cx + fx + vx
+  AlphaCode rx = 0;
+  const int setBits = registerMask.count();
+  for (size_t r = channel; r < NUM_TIA_REGISTERS; r += 2) {
+    rx = (rx << 1) | (setBits > 1 ? 1 : registerMask[r]);
+  }
+  for (size_t r = channel; r < NUM_TIA_REGISTERS; r += 2) {
+    rx = (rx << 8) | ((setBits > 1 || registerMask[r]) ? values[r] : 0);
+  }
+  codeSequence.emplace_back(rx);
+  framesToWrite -= 1;
+
+  // encode any additional frames as 5 bits indicating the number of frames to skip
+  while (framesToWrite > 0) {
+    const unsigned char sx = framesToWrite > 63 ? 63 : framesToWrite;
+    codeSequence.emplace_back(sx);
+    framesToWrite = framesToWrite - sx;
+  }
+
+}
+
+size_t DivExportAtari2600::encodeSpan(
+  const std::vector<AlphaCode> sequence, 
+  const Span &bounds,
+  const std::vector<Span> &copySequence,
+  const bool recurse)
+{
+  size_t totalSize = 0;
+  size_t currentIndex = bounds.start;
+  size_t endIndex = bounds.start + bounds.length;
+  while (currentIndex < endIndex) {
+    if ((!recurse) || (copySequence[currentIndex].length == 1)) {
+      totalSize += writeAlphaCode(sequence[currentIndex]);
+      currentIndex++;
+      continue;
+    }
+
+    if (copySequence[currentIndex].start == currentIndex) {
+      // push copy block
+      totalSize += this->writeSpanReference(copySequence[currentIndex].start, copySequence[currentIndex].length);
+      totalSize += this->writeSpanLabel(copySequence[currentIndex]);
+      this->encodeSpan(
+        sequence, 
+        copySequence[currentIndex],
+        copySequence,
+        false);
+      totalSize += writePop();
+    } else {
+      // emit block ref
+      totalSize += this->writeSpanReference(copySequence[currentIndex].start, 1);
+    }
+
+    currentIndex += copySequence[currentIndex].length;
+  }
+
+  return totalSize;
+}
+
+size_t DivExportAtari2600::writeAlphaCode(AlphaCode code) { return ((code >> 24) == 7) ? 2 : 1; }
+size_t DivExportAtari2600::writeSpanReference(const size_t start, const size_t length) { return 2; }
+size_t DivExportAtari2600::writeSpanLabel(const Span &span) { return 0; }
+size_t DivExportAtari2600::writePop() { return 1; }
 
 /**
  *  Write note data. Format 0:

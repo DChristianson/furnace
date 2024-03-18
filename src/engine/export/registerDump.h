@@ -252,6 +252,24 @@ void findCommonDumpSequences(
 typedef uint64_t AlphaCode;
 typedef int AlphaChar;
 
+/**
+ * Compare a pair by second
+ */ 
+template <class T, class S>
+bool compareSecond(std::pair<T, S> a, std::pair<T, S> b) {
+  return a.second > b.second;
+}
+
+struct Span {
+
+  size_t start;
+  size_t length;
+  size_t score;
+
+  Span(size_t start, size_t length, size_t score) : start(start), length(length), score(score) {}
+
+};
+
 struct SuffixTree {
 
   SuffixTree *parent;
@@ -288,19 +306,45 @@ struct SuffixTree {
 
   SuffixTree *find(const std::vector<AlphaChar> &K, const std::vector<AlphaChar> &S);
 
+  /**
+   * @brief find all the leaves in this node's subtree
+   * 
+   * @param leaves 
+   * @return size_t 
+   */
   size_t gather_leaves(std::vector<SuffixTree *> &leaves);
 
   SuffixTree *find_maximal_substring();
 
+  /**
+   * @brief find all the left diverse nodes in this node's subtree
+   *
+   * a node is left diverse when at least two leaves in its subtree have different left characters
+   * 
+   * @param nodes 
+   * @param S 
+   * @return AlphaChar 
+   */
   AlphaChar gather_left(std::vector<SuffixTree *> &nodes, const std::vector<AlphaChar> &S);
+  
+  void gather_repeated_subsequences(
+    const std::vector<AlphaChar> &alphaSequence,
+    std::vector<Span> &uniqueSubsequences,
+    std::vector<Span> &copySequence
+  );
 
 };
-
 
 void createAlphabet(
   const std::map<AlphaCode, String> &commonDumpSequences,
   std::vector<AlphaCode> &alphabet,
   std::map<String, AlphaChar> &index
+);
+
+void createAlphabet(
+  const std::map<AlphaCode, unsigned int> &frequencyMap,
+  std::vector<AlphaCode> &alphabet,
+  std::map<AlphaCode, AlphaChar> &index
 );
 
 void translateString(
@@ -315,8 +359,6 @@ SuffixTree * createSuffixTree(
     const std::vector<AlphaChar> &alphaSequence
 );
 
-
-void testCompress(SuffixTree *root, const std::vector<AlphaChar> &alphaSequence);
 void testCommonSubsequences(const String &input);
 void testCommonSubsequencesBrute(const String &input);
 
