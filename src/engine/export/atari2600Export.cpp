@@ -20,15 +20,16 @@
 #include "atari2600Export.h"
 
 #include <fmt/printf.h>
+#include <queue>
 #include <set>
 #include "../../ta-log.h"
 
-const unsigned int AUDC0 = 0x15;
-const unsigned int AUDC1 = 0x16;
-const unsigned int AUDF0 = 0x17;
-const unsigned int AUDF1 = 0x18;
-const unsigned int AUDV0 = 0x19;
-const unsigned int AUDV1 = 0x1A;
+const int AUDC0 = 0x15;
+const int AUDC1 = 0x16;
+const int AUDF0 = 0x17;
+const int AUDF1 = 0x18;
+const int AUDV0 = 0x19;
+const int AUDV1 = 0x1A;
 
 std::map<unsigned int, unsigned int> channel0AddressMap = {
   {AUDC0, 0},
@@ -144,8 +145,14 @@ std::vector<DivROMExportOutput> DivExportAtari2600::go(DivEngine* e) {
   logD("writing track title graphics");
   SafeWriter* titleData=new SafeWriter;
   titleData->init();
-  titleData->writeText(fmt::sprintf("; Song: %s\n", e->song.name));
+  titleData->writeText(fmt::sprintf("; Name: %s\n", e->song.name));
   titleData->writeText(fmt::sprintf("; Author: %s\n", e->song.author));
+  titleData->writeText(fmt::sprintf("; Album: %s\n", e->song.category));
+  titleData->writeText(fmt::sprintf("; System: %s\n", e->song.systemName));
+  titleData->writeText(fmt::sprintf("; Tuning: %g\n", e->song.tuning));
+  titleData->writeText(fmt::sprintf("; Instruments: %d\n", e->song.insLen));
+  titleData->writeText(fmt::sprintf("; Wavetables: %d\n", e->song.waveLen));
+  titleData->writeText(fmt::sprintf("; Samples: %d\n\n", e->song.sampleLen));
   auto title = (e->song.name.length() > 0) ?
      (e->song.name + " by " + e->song.author) :
      "furnace tracker";
@@ -337,10 +344,15 @@ void DivExportAtari2600::writeTrackData(
   std::vector<DivROMExportOutput> &ret
 ) {
 
-
+  // BUGBUG: hz
+  // BUGBUG: pre-dedup writes?
+  // BUGBUG: separate songs?
   // encode command streams
   std::vector<AlphaCode> codeSequences[e->song.subsong.size()][2];
   for (size_t song = 0; song < e->song.subsong.size(); song++) {
+    const float hz = (e->song.subsong[song])->hz;
+    const int ticksPerFrame = (((float)TICKS_PER_SECOND) / hz);
+    logD("hz:%f interval:%d", hz, ticksPerFrame);
     for (int channel = 0; channel < 2; channel += 1) {
       int pendingRegisters[NUM_TIA_REGISTERS];
       int currentRegisters[NUM_TIA_REGISTERS];
@@ -356,7 +368,6 @@ void DivExportAtari2600::writeTrackData(
         if ((r < 0) || (r > AUDV1) || ((r % 2) != channel)) {
           continue;
         }
-
         // get delta since last iteration
         const int deltaTicks = 0 == commandCount ? 0 : (
           write.ticks - lastCommandTicks + 
@@ -367,7 +378,7 @@ void DivExportAtari2600::writeTrackData(
         commandCount++;
         
         ticksSinceLastWrite += deltaTicks;
-        const int framesToWrite = ticksSinceLastWrite / TICKS_AT_60HZ;
+        const int framesToWrite = ticksSinceLastWrite / ticksPerFrame;
         
         if (framesToWrite > 0) {
           TiaRegisterMask registerMask;
@@ -385,7 +396,7 @@ void DivExportAtari2600::writeTrackData(
               framesToWrite,
               codeSequences[song][channel]);
             memcpy(currentRegisters, pendingRegisters, NUM_TIA_REGISTERS * sizeof(int));
-            ticksSinceLastWrite = ticksSinceLastWrite - (framesToWrite * TICKS_AT_60HZ);
+            ticksSinceLastWrite = ticksSinceLastWrite - (framesToWrite * ticksPerFrame);
           }
         }
         // update register value
@@ -413,19 +424,35 @@ void DivExportAtari2600::writeTrackData(
     }
   }
 
-  // create a frequency map of all codes
-  std::map<AlphaCode, unsigned int> frequencyMap;
-  size_t codeSequenceTotalSize = 0;
-  for (size_t song = 0; song < e->song.subsong.size(); song++) {
+  // create a frequency map of all codes in all songs
+  //BUGBUG: for testing
+  SafeWriter* uncompressedSequenceData =new SafeWriter;
+  SafeWriter* uncompressedBinaryData =new SafeWriter;
+  uncompressedSequenceData->init();
+  uncompressedBinaryData->init();
+  std::map<AlphaCode, size_t> fakeCommandDictionary;
+  std::map<AlphaCode, size_t> frequencyMap;
+  std::map<AlphaCode, std::map<AlphaCode, size_t>> frequencyFollowMap;
+  size_t totalSizeAllSequences = 0;
+  for (size_t subsong = 0; subsong < e->song.subsong.size(); subsong++) {
     for (int channel = 0; channel < 2; channel += 1) {
-      codeSequenceTotalSize += codeSequences[song][channel].size();
-      for (auto cx : codeSequences[song][channel]) {
-        frequencyMap[cx]++;
+      totalSizeAllSequences += codeSequences[subsong][channel].size();
+      size_t i = 0;
+      AlphaCode lastCode = 0;
+      for (auto code : codeSequences[subsong][channel]) {
+
+        writeAlphaCode(uncompressedSequenceData, uncompressedBinaryData, code, fakeCommandDictionary);
+        frequencyMap[code]++;
+        frequencyFollowMap[lastCode][code]++;
+        lastCode = code;
+        i++;
       }
     }
   }
+  ret.push_back(DivROMExportOutput("Track_uncompressed.asm", uncompressedSequenceData));
+  ret.push_back(DivROMExportOutput("Track_uncompressed.bin", uncompressedBinaryData));
 
-  // index all codes into an alphabet
+  // put all distinct codes into an "alphabet" so we can build a suffix tree
   std::vector<AlphaCode> alphabet;
   std::map<AlphaCode, AlphaChar> index;
   createAlphabet(
@@ -433,14 +460,31 @@ void DivExportAtari2600::writeTrackData(
     alphabet,
     index
   );
-    
-  // compute some basic stats
-  logD("alphabet size %d", alphabet.size());
+
+  size_t singletons = 0;
+  size_t maxbranch = 0;
+  AlphaCode maxcode = 0;
+  for (auto& x : frequencyFollowMap) {
+    if (x.second.size() > maxbranch) {
+      maxbranch = x.second.size();
+      maxcode = x.first;
+    }
+    if (x.second.size() == 1) {
+      singletons++;
+    }
+  }
+  logD("total codes : %d ", frequencyMap.size());
+  logD("maxbranch %08x : %d ", maxcode, maxbranch);
+  logD("singletons : %d ", singletons);
+
+  // debugging: compute basic stats
+  logD("total size of all sequences: %d", totalSizeAllSequences);
+  logD("distinct codes: %d", alphabet.size());
   for (auto a : alphabet) {
-    logD("  %08x -> %d", a, frequencyMap[a]);
+    logD("  %08x -> %d (rank %d)", a, frequencyMap[a], index.at(a));
   }
   double entropy = 0;
-  const double symbolCount = codeSequenceTotalSize;
+  const double symbolCount = totalSizeAllSequences;
   for (auto &x : frequencyMap) {
     if (0 == x.first) {
       continue;
@@ -454,16 +498,18 @@ void DivExportAtari2600::writeTrackData(
   logD("entropy: %lf (%lf bits / %lf bytes)", entropy, expectedBits, expectedBytes);
 
   // compress sequences
-  for (size_t song = 0; song < e->song.subsong.size(); song++) {
+  std::vector<Span> copySequences[e->song.subsong.size()][2];
+  for (size_t subsong = 0; subsong < e->song.subsong.size(); subsong++) {
     for (int channel = 0; channel < 2; channel += 1) {
       std::vector<AlphaChar> alphaSequence;
-      alphaSequence.reserve(codeSequences[song][channel].size());         
+      alphaSequence.reserve(codeSequences[subsong][channel].size());         
 
       // copy string into alphabet
-      for (auto code : codeSequences[song][channel]) {
+      for (auto code : codeSequences[subsong][channel]) {
         AlphaChar c = index.at(code);
         alphaSequence.emplace_back(c);
       }
+
       // create suffix tree 
       SuffixTree *root = createSuffixTree(
         alphabet,
@@ -471,60 +517,105 @@ void DivExportAtari2600::writeTrackData(
       );
 
       // find maximal repeats
-      std::vector<Span> repeats;
-      std::vector<Span> copySequence;
-      root->gather_repeated_subsequences(alphaSequence, repeats, copySequence);
+      compressSequence(
+        root,
+        subsong,
+        channel,
+        alphaSequence,
+        copySequences[subsong][channel]
+      );
 
       delete root;
 
-      const size_t encodingSize = encodeSpan(
-        codeSequences[song][channel], 
-        Span(0, alphaSequence.size(), 1),
-        copySequence, true);
+    }
+  }
 
+  std::map<AlphaCode, size_t> commandFrequency;
+  size_t totalEncodedSize = 0;
+  std::vector<AlphaCode> encodedSequences[e->song.subsong.size()][2];
+  for (size_t subsong = 0; subsong < e->song.subsong.size(); subsong++) {
+    for (int channel = 0; channel < 2; channel += 1) {
+      encodeCopySequence(
+        codeSequences[subsong][channel], 
+        Span(subsong, channel, 0, codeSequences[subsong][channel].size()),
+        copySequences[subsong][channel], 
+        encodedSequences[subsong][channel]);
+
+      for (auto code : encodedSequences[subsong][channel]) {
+        commandFrequency[code]++;
+      }
+
+      const size_t encodingSize = encodedSequences[subsong][channel].size();
+      totalEncodedSize += encodingSize;
       logD("sequence estimated size: %d", encodingSize);
 
     }
   }
 
-  // write literal dictionary
-  if (this->literalDictionarySize > 0) { 
-    SafeWriter* literals =new SafeWriter;
-    literals->init();
-
-    std::vector<std::pair<AlphaCode, size_t>> literalFreq;
-    std::map<AlphaCode, size_t> literalDictionary;
-    for (auto &x : frequencyMap) {
-      // BUGBUG: only write 
-      if ((x.first >> 24) != 7) continue; // BUGBUG magic detection of 2-byte codes
-      if (x.second < 2) continue; // BUGBUG: 
-      literalFreq.emplace_back(x);
+  logD("command frequencies");
+  std::priority_queue<std::pair<AlphaCode, size_t>, std::vector<std::pair<AlphaCode, size_t>>, CompareFrequencies> priorityQueue;
+  for (auto &x : commandFrequency) {
+    logD("  %010x -> %d", x.first, x.second);
+    unsigned char codeType = (x.first >> 32);
+    if ((codeType != 7) && (codeType != 9)) {
+      continue;
     }
-    // sort by freq
-    std::sort(literalFreq.begin(), literalFreq.end(), compareSecond<AlphaCode, size_t>);
-    for (size_t i = 0; i < this->literalDictionarySize && i < literalFreq.size(); i++) {
-      literalDictionary[literalFreq[i].first] = i;
+    if (priorityQueue.size() == 128) {
+      if (priorityQueue.top().second < x.second) {
+        priorityQueue.pop();
+        priorityQueue.push(x);
+      }
+    } else {
+      priorityQueue.push(x);
     }
-
-    // BUGBUG: output
-    ret.push_back(DivROMExportOutput("Track_literals.asm", literals));
   }
+  
+  std::map<AlphaCode, size_t> commandDictionary;
+  logD("dictionary");
+  size_t rank = 0;
+  while (!priorityQueue.empty()) {
+    auto top = priorityQueue.top();
+    logD("  (%d): %010x -> %d", rank, top.first, top.second);
+    commandDictionary[top.first] = rank++;
+    priorityQueue.pop();
+  }
+
+  std::map<AlphaCode, size_t> literalFrequency;
+
+  SafeWriter* sequenceData = new SafeWriter;
+  SafeWriter* binarySequenceData =new SafeWriter;
+  sequenceData->init();
+  binarySequenceData->init();
+  size_t totalBinarySize = 0;
+  for (size_t subsong = 0; subsong < e->song.subsong.size(); subsong++) {
+    for (int channel = 0; channel < 2; channel += 1) {
+      sequenceData->writeText(fmt::sprintf("SONG_%d_CHANNEL_%d\n", subsong, channel));
+      for (auto code : encodedSequences[subsong][channel]) {
+        totalBinarySize += writeAlphaCode(sequenceData, binarySequenceData, code, commandDictionary);
+      }
+    }
+  }
+  ret.push_back(DivROMExportOutput("Track_sequences.asm", sequenceData));
+  ret.push_back(DivROMExportOutput("Track_binary.bin", binarySequenceData));
       
-
-  // get suffix tree
-
-  // start to write
-  // if repeat, put in address of start
-  // 
-  // if  literal sequence
-  // end literal
-  // inject repeats
-  //
+  logD("song encoded size/sequence length: %d / %d / %d", totalEncodedSize, totalSizeAllSequences, totalBinarySize);
 
   // BUGBUG: Not production 
   // just testing 
+//  xabxac -  bxa<c$
+//            10 1
+//            10
+//  xabxabxac bxa<c$
+//            10 1
+//            110
+//  xabxacxab cxa<b<$
+//            10 1 0
+//            0110
+//  xabcyiiizabcqabcyr xabc<y<iiiz@q@r$
+//                      1  2 3    1213
+//                     00101
 //  testCommonSubsequences("banana");
-  testCommonSubsequences("abcdeabcdefghijfghijabcdexyxyxyx");
+ // testCommonSubsequences("abcdeabcdefghijfghijabcdexyxyxyx");
  // testCommonSubsequences("xabcyiiizabcqabcyr");
 //  testCommonSubsequencesBrute("banana");
 //  testCommonSubsequencesBrute("xabcyiiizabcqabcyr");
@@ -568,6 +659,15 @@ void DivExportAtari2600::writeTrackData(
 /**
  * @brief write a set of registers
  * 
+ * delta literal encoding:
+ * -----------------
+ * 11sfffff ccccvvvv - embedded register values with sustain 0/1
+ * 10dddddd          - literal dictionary lookup 0-63
+ * 01sfffff          - change frequency with sustain 0/1
+ * 001svvvv          - change volume with sustain 0/1
+ * 000sssss          - sustain 1-31
+ * 00000000          - end block
+ * 
  * @param channel 
  * @param registerMask 
  * @param values 
@@ -592,59 +692,194 @@ void DivExportAtari2600::writeAlphaCodesToChannel(
   for (size_t r = channel; r < NUM_TIA_REGISTERS; r += 2) {
     rx = (rx << 8) | ((setBits > 1 || registerMask[r]) ? values[r] : 0);
   }
+  const unsigned char sx = framesToWrite > 4 ? 4 : 1;
+  rx = (rx << 8) | sx;
   codeSequence.emplace_back(rx);
-  framesToWrite -= 1;
+  framesToWrite -= sx;
 
   // encode any additional frames as 5 bits indicating the number of frames to skip
   while (framesToWrite > 0) {
-    const unsigned char sx = framesToWrite > 63 ? 63 : framesToWrite;
-    codeSequence.emplace_back(sx);
-    framesToWrite = framesToWrite - sx;
+    const unsigned char skip = framesToWrite > 15 ? 15 : framesToWrite;
+    codeSequence.emplace_back(skip);
+    framesToWrite = framesToWrite - skip;
   }
 
 }
 
-size_t DivExportAtari2600::encodeSpan(
-  const std::vector<AlphaCode> sequence, 
+AlphaCode AC_SPAN_LABEL(const Span &span) {
+  return ((AlphaCode) 8 << 32) | ((AlphaCode) span.subsong << 24) | ((AlphaCode) span.channel << 16) | (AlphaCode) span.start;
+}
+
+AlphaCode AC_SPAN_REF(const Span &span) {
+  return ((AlphaCode) 9 << 32) | ((AlphaCode) span.subsong << 24) | ((AlphaCode) span.channel << 16) | (AlphaCode) span.start;
+}
+
+const AlphaCode AC_POP = 0;
+
+void DivExportAtari2600::encodeCopySequence(
+  const std::vector<AlphaCode> &sequence, 
   const Span &bounds,
   const std::vector<Span> &copySequence,
-  const bool recurse)
+  std::vector<AlphaCode> &encodedSequence)
 {
-  size_t totalSize = 0;
   size_t currentIndex = bounds.start;
   size_t endIndex = bounds.start + bounds.length;
   while (currentIndex < endIndex) {
-    if ((!recurse) || (copySequence[currentIndex].length == 1)) {
-      totalSize += writeAlphaCode(sequence[currentIndex]);
-      currentIndex++;
+    if (copySequence[currentIndex].start == currentIndex && copySequence[currentIndex].length == 1) {
+      size_t spanEndIndex = currentIndex + 1;
+      while (spanEndIndex < endIndex && copySequence[spanEndIndex].start == spanEndIndex && copySequence[spanEndIndex].length == 1) {
+        spanEndIndex++;
+      }
+      encodeDeltaSequence(
+        sequence, 
+        Span(bounds.subsong, bounds.channel, currentIndex, spanEndIndex - currentIndex),
+        encodedSequence);
+      currentIndex = spanEndIndex;
       continue;
     }
 
     if (copySequence[currentIndex].start == currentIndex) {
       // push copy block
-      totalSize += this->writeSpanReference(copySequence[currentIndex].start, copySequence[currentIndex].length);
-      totalSize += this->writeSpanLabel(copySequence[currentIndex]);
-      this->encodeSpan(
+      encodedSequence.emplace_back(AC_SPAN_LABEL(copySequence[currentIndex]));
+      encodeDeltaSequence(
         sequence, 
         copySequence[currentIndex],
-        copySequence,
-        false);
-      totalSize += writePop();
+        encodedSequence);
+      encodedSequence.emplace_back(AC_POP);
+      //logD("label %d/%d start %d len %d", copySequence[currentIndex].subsong, copySequence[currentIndex].channel, copySequence[currentIndex].start, copySequence[currentIndex].length);
     } else {
       // emit block ref
-      totalSize += this->writeSpanReference(copySequence[currentIndex].start, 1);
+      encodedSequence.emplace_back(AC_SPAN_REF(copySequence[currentIndex]));
+      //logD("ref %d/%d start %d len %d", copySequence[currentIndex].subsong, copySequence[currentIndex].channel, copySequence[currentIndex].start, copySequence[currentIndex].length);
     }
 
     currentIndex += copySequence[currentIndex].length;
   }
 
-  return totalSize;
 }
 
-size_t DivExportAtari2600::writeAlphaCode(AlphaCode code) { return ((code >> 24) == 7) ? 2 : 1; }
-size_t DivExportAtari2600::writeSpanReference(const size_t start, const size_t length) { return 2; }
-size_t DivExportAtari2600::writeSpanLabel(const Span &span) { return 0; }
-size_t DivExportAtari2600::writePop() { return 1; }
+void DivExportAtari2600::encodeDeltaSequence(
+  const std::vector<AlphaCode> &sequence, 
+  const Span &bounds,
+  std::vector<AlphaCode> &encodedSequence)
+{
+  size_t currentIndex = bounds.start;
+  size_t endIndex = bounds.start + bounds.length;
+  while (currentIndex < endIndex) {
+    AlphaCode cx = sequence[currentIndex];
+    currentIndex++;
+    AlphaCode skip = 0;
+    while (currentIndex < endIndex && ((sequence[currentIndex] >> 32) == 0)) {
+      skip += sequence[currentIndex];
+      currentIndex++;
+    }
+    cx += skip;
+    encodedSequence.emplace_back(cx);
+  }
+}
+
+size_t DivExportAtari2600::writeAlphaCode(SafeWriter* w, SafeWriter* b, AlphaCode code, const std::map<AlphaCode, size_t> &commandDictionary) {
+  unsigned char rx = code >> 32;
+  if (rx == 9) {
+    int subsong = (code >> 24) & 0xff;
+    int channel = (code >> 16) & 0xff;
+    size_t start = code & 0xffff;
+    w->writeText(fmt::sprintf("    ; SPAN_REF(%d, %d, %d)\n", subsong, channel, start));
+    auto index = commandDictionary.find(code);
+    if (index != commandDictionary.end()) {
+      w->writeText(fmt::sprintf("    byte %d\n", index->second));
+      b->writeC(index->second);
+      return 1;
+    } else {
+      w->writeText(fmt::sprintf("    word SPAN_START_%d_%d_%d\n", subsong, channel, start));
+      b->writeI(0xf000 + start);
+      return 2;
+    }
+
+  } else if (rx == 8) {
+    int subsong = (code >> 24) & 0xff;
+    int channel = (code >> 16) & 0xff;
+    size_t start = code & 0xffff;
+    w->writeText(fmt::sprintf("    ; SPAN_START(%d, %d, %d)\n", subsong, channel, start));
+    return 0;
+
+  } else if (rx == 7) {
+    unsigned char cx = (code >> 24) & 0xff;
+    unsigned char fx = (code >> 16) & 0xff;
+    unsigned char vx = (code >> 8) & 0xff;
+    unsigned char sx = code & 0xff;
+    w->writeText(fmt::sprintf("    ; C%0d F%0d V%0d S%0d\n", cx, fx, vx, sx));
+    auto index = commandDictionary.find(code);
+    if (index != commandDictionary.end()) {
+      w->writeText(fmt::sprintf("    byte %d\n", index->second));
+      b->writeC(index->second);
+      return 1;
+    } else {
+      w->writeText(fmt::sprintf("    byte %d, %d\n", 0xa0 + fx, (cx << 4) | vx));
+      b->writeC(0xa0 + fx);
+      b->writeC((cx << 4) | vx);
+
+      if (sx > 1) {
+        w->writeText(fmt::sprintf("    byte %d\n", 0x80 + (sx - 1)));
+        b->writeC(0x80 + (sx - 1));
+        return 3;
+      }
+      return 2;
+    }
+
+  } else if (rx == 4) {
+    unsigned char cx = (code >> 24) & 0xff;
+    unsigned char sx = code & 0xff;
+    w->writeText(fmt::sprintf("    ; C%0d S%0d\n", cx, sx));
+    w->writeText(fmt::sprintf("    byte %d\n", 0x90 + cx));
+    b->writeC(0x90 + cx);
+    if (sx > 1) {
+      w->writeText(fmt::sprintf("    byte %d\n", 0x80 + (sx - 1)));
+      b->writeC(0x80 + (sx - 1));
+      return 2;
+    }
+    return 1;
+
+  } else if (rx == 2) {
+    unsigned char fx = (code >> 16) & 0xff;
+    unsigned char sx = code & 0xff;
+    w->writeText(fmt::sprintf("    ; F%0d S%0d\n", fx, sx));
+    w->writeText(fmt::sprintf("    byte %d\n", 0xc0 + fx));
+    b->writeC(0xc0 + fx);
+    if (sx > 1) {
+      w->writeText(fmt::sprintf("    byte %d\n", 0x80 + (sx - 1)));
+      b->writeC(0x80 + (sx - 1));
+      return 2;
+    }
+    return 1;
+
+  } else if (rx == 1) {
+    unsigned char vx = (code >> 8) & 0xff;
+    unsigned char sx = code & 0xff;
+    w->writeText(fmt::sprintf("    ; V%0d S%0d\n", vx, sx));
+    w->writeText(fmt::sprintf("    byte %d\n", 0xe0 + vx));
+    b->writeC(0xe0 + vx);
+    if (sx > 1) {
+      w->writeText(fmt::sprintf("    byte %d\n", 0x80 + (sx - 1)));
+      b->writeC(0x80 + (sx - 1));
+      return 2;
+    }
+    return 1;
+
+  } else if (code == 0) {
+    w->writeText("    ; POP\n");
+    w->writeText(fmt::sprintf("    byte 0\n"));
+    b->writeC(0);
+    return 1;
+
+  } else {
+    w->writeText(fmt::sprintf("    ; SKIP %0d\n", code));
+    w->writeText(fmt::sprintf("    byte %d\n", 0x80 + code));
+    b->writeC(0x80 + code);
+    return 1;
+  }
+
+}
 
 /**
  *  Write note data. Format 0:

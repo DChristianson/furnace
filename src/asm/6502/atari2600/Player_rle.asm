@@ -9,21 +9,87 @@ audio_song              ds 1 ;
 audio_stack             ds 2 * NUM_CHANNELS;
 audio_timer             ds NUM_CHANNELS;
 
+; coconut - 5k.fur file - all the volumes, all the frequencies, all the channels, few channel delta, skips <= 4
+; spanish flea - 1k.fur file - all the volumes, half the frequencies, a few channels, skips <=4 
+; breakbeat - 2k.fur file - all the volumes (delta master volume), all the frequencies, half the channels, skips <= 4
+; hmove - 1k.fur file - half the volumes, half the frequencies, a few channels, skips <= 4
+; 
+; 
+; ideas
+; ----------------------
+; straight register dump      - 2 bytes per channel
+; delta compression           - 1 byte modifiers
+; frequency envelope encoding - like TIA tracker
 ;
-; sequence stack
-;   11..xxxx yyyyyyyy push sequence at address $Fxyy
-;   10xxxxxx          push sequence at dictionary 0 <= x < 63
-;   0ddddddd          push literal sequence length d
-;   00000000          pop
+; compression techniques
+; -----------------
+; dictionary lookup
+; subroutine compression
+; huffman encoded 
+; LZ arithmetic family
+; using markov chain
+; 
+; schemes
+;   command            -
+;   command dictionary -
+;   
+;   duration        -
+;   envelope        - duration, channel, attack, decay, sustain, release
+;   m
 ;
-; literal section
-;   1xxxxxxx          literal dictionary 0 < x < 127
-;   011fffff ccccvvvv all registers
-;   010fffff          frequency only
-;   0010vvvv          volume only
-;   0001cccc          channel only
-;   0000dddd          d > 1, skip
-;   00000000          pop
+; 0-3 sustain
+;   5 bits 
+; 
+; 1111hhhh llllllll
+;
+; 0eefffff ccccvvvv 
+;
+; simple encoding:
+; -----------------
+; sssfffff ccccvvvv
+; 
+; delta literal encoding:
+; -----------------
+; 11sfffff ccccvvvv - embedded register values with sustain 0/1
+; 10dddddd          - literal dictionary lookup 0-63
+; 01sfffff          - change frequency with sustain 0/1
+; 001svvvv          - change volume with sustain 0/1
+; 0001siii          - chance instrument with sustain 0/1
+; 0000ssss          - sustain 1-15
+; 00000000          - end block
+;
+; delta sequence encoding
+; ------------------
+; 1111hhhh llllllll - sequence address lookup
+; 10dddddd          - sequence dictionary lookup 0-63
+; 110fffff ccccvvvv - embedded register values with sustain 0
+; 1110vvvv          - embedded volume change with sustain 0
+; 0lllllll          - literal block length 1-127
+; 00000000          - end block
+;
+; combination literal encoding:
+; -----------------
+; 1111hhhh llllllll - repeat section at hhhh llllllll
+; 10sfffff ccccvvvv - embedded register values with sustain 0-1
+; 01dddddd          - dictionary lookup 0-63
+; 001fffff          - change frequency 
+; 0001vvvv          - change volume 
+; 00001iii          - chance instrument 
+; 00000sss          - sustain 1-8
+; 00000000          - pop/end block
+;
+; command dictionary encoding:
+; -----------------
+; 1000ssss          - sustain 0-31 (1-32)
+; 1001cccc          - change channel
+; 101fffff ccccvvvv - embedded register values
+; 110fffff          - embedded register values 
+; 1110vvvv          - embedded register values
+; 1111hhhh llllllll - branch to hhhh llllllll
+; 0ddddddd          - command lookup 1-127
+; 00000000          - pop/end block
+; 00000000 00000000 - end song
+; 
 ;
 
 sub_inc_song
