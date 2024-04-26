@@ -250,23 +250,87 @@ void findCommonDumpSequences(
 );
 
 typedef uint64_t AlphaCode;
+typedef uint64_t SpanCode;
 typedef int AlphaChar;
-
-/**
- * Compare a pair by second
- */ 
-template <class T, class S>
-bool compareSecond(std::pair<T, S> a, std::pair<T, S> b) {
-  return a.second > b.second;
-}
 
 struct Span {
 
+  int    subsong;
+  int    channel;
   size_t start;
   size_t length;
-  size_t score;
 
-  Span(size_t start, size_t length, size_t score) : start(start), length(length), score(score) {}
+  Span(int subsong, int channel, size_t start, size_t length) :
+    subsong(subsong),
+    channel(channel),
+    start(start),
+    length(length) {}
+
+};
+
+class CompareFrequencies {
+ public:
+
+  bool operator()(const std::pair<AlphaCode, size_t> &a, const const std::pair<AlphaCode, size_t> &b) const
+  {
+    if (a.second != b.second) return a.second > b.second;
+    return a.first < b.first;
+  } 
+
+};
+
+class CompareSpans {
+public:
+
+  bool operator()(const Span &a, const Span &b) const
+  {
+    if (a.subsong != b.subsong) return a.subsong < b.subsong;
+    if (a.channel != b.channel) return a.channel < b.channel;
+    if (a.start != b.start) return a.start < b.start;
+    return a.length < b.length;
+  }
+};
+
+/**
+ * Collection of duplicate spans
+ */
+struct DuplicateSpans {
+
+  std::vector<Span> spans;
+  size_t length;
+  size_t weight;
+  std::map<AlphaChar, size_t> in;
+  std::map<AlphaChar, size_t> out;
+
+  DuplicateSpans(size_t length, size_t weight) : length(length), weight(weight) {}
+
+};
+
+/**
+ * Compare duplicates by length
+ */
+class CompareDuplicateLengths {
+public:
+
+  bool operator()(DuplicateSpans * a, DuplicateSpans * b) const {
+    if (a->length != b->length) return a->length < b->length;
+    if (a->weight != b->weight) return a->weight < b->weight;
+    return a < b;
+  }
+
+};
+
+/**
+ * Compare duplicates by weight
+ */
+class CompareDuplicateSpanWeights {
+public:
+
+  bool operator()(DuplicateSpans * a, DuplicateSpans * b) const {
+    if (a->weight != b->weight) return a->weight < b->weight;
+    if (a->length != b->length) return a->length < b->length;
+    return a < b;
+  }
 
 };
 
@@ -317,23 +381,36 @@ struct SuffixTree {
   SuffixTree *find_maximal_substring();
 
   /**
-   * @brief find all the left diverse nodes in this node's subtree
+   * @brief gather all the left diverse nodes in this node's subtree
    *
    * a node is left diverse when at least two leaves in its subtree have different left characters
    * 
    * @param nodes 
-   * @param S 
+   * @param S - reference string
    * @return AlphaChar 
    */
   AlphaChar gather_left(std::vector<SuffixTree *> &nodes, const std::vector<AlphaChar> &S);
-  
-  void gather_repeated_subsequences(
-    const std::vector<AlphaChar> &alphaSequence,
-    std::vector<Span> &uniqueSubsequences,
-    std::vector<Span> &copySequence
-  );
 
 };
+
+void createAlphabet(
+  const std::map<AlphaCode, size_t> &frequencyMap,
+  std::vector<AlphaCode> &alphabet,
+  std::map<AlphaCode, AlphaChar> &index
+);
+
+SuffixTree * createSuffixTree(
+  const std::vector<AlphaCode> &alphabet,
+  const std::vector<AlphaChar> &alphaSequence
+);
+
+void compressSequence(
+  SuffixTree *root,
+  int subsong,
+  int channel,
+  const std::vector<AlphaChar> &alphaSequence,
+  std::vector<Span> &copySequence
+);
 
 void createAlphabet(
   const std::map<AlphaCode, String> &commonDumpSequences,
@@ -341,25 +418,13 @@ void createAlphabet(
   std::map<String, AlphaChar> &index
 );
 
-void createAlphabet(
-  const std::map<AlphaCode, unsigned int> &frequencyMap,
-  std::vector<AlphaCode> &alphabet,
-  std::map<AlphaCode, AlphaChar> &index
-);
-
 void translateString(
-    const std::vector<String> &sequence,
-    const std::map<String, String> &representativeMap,
-    const std::map<String, AlphaChar> &index,
-    std::vector<AlphaChar> &alphaSequence
-);
-
-SuffixTree * createSuffixTree(
-    const std::vector<AlphaCode> &alphabet,
-    const std::vector<AlphaChar> &alphaSequence
+  const std::vector<String> &sequence,
+  const std::map<String, String> &representativeMap,
+  const std::map<String, AlphaChar> &index,
+  std::vector<AlphaChar> &alphaSequence
 );
 
 void testCommonSubsequences(const String &input);
-void testCommonSubsequencesBrute(const String &input);
 
 #endif // _REGISTERDUMP_H

@@ -29,7 +29,7 @@ const size_t NUM_TIA_REGISTERS = 6;
 typedef std::bitset<NUM_TIA_REGISTERS> TiaRegisterMask;
 
 const unsigned char DEFAULT_STACK_DEPTH  = 2;
-const unsigned char DEFAULT_LITERAL_DICTIONARY_SIZE = 128;
+const unsigned char DEFAULT_LITERAL_DICTIONARY_SIZE = 64;
 const unsigned char DEFAULT_SEQUENCE_DICTIONARY_SIZE = 64;
 
 
@@ -76,16 +76,18 @@ class DivExportAtari2600 : public DivROMExport {
     std::vector<DivROMExportOutput> &ret
   );
 
-  size_t encodeSpan(
-    const std::vector<AlphaCode> sequence, 
+  void encodeCopySequence(
+    const std::vector<AlphaCode> &sequence, 
     const Span &bounds,
     const std::vector<Span> &copySequence,
-    const bool recurse);
+    std::vector<AlphaCode> &encodedSequence);
 
-  size_t writeAlphaCode(AlphaCode code);
-  size_t writeSpanReference(const size_t start, const size_t length);
-  size_t writeSpanLabel(const Span &span);
-  size_t writePop();
+  void encodeDeltaSequence(
+    const std::vector<AlphaCode> &sequence, 
+    const Span &bounds,
+    std::vector<AlphaCode> &encodedSequence);
+
+  size_t writeAlphaCode(SafeWriter* w, SafeWriter* b, AlphaCode code, const std::map<AlphaCode, size_t> &commandDictionary);
 
 public:
 

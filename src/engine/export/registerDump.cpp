@@ -18,6 +18,7 @@
  */
 
 #include "registerDump.h"
+#include <queue>
 
 void registerDump(
   DivEngine* e, 
@@ -185,13 +186,6 @@ void captureSequence(
   }
 }
 
-
-
-// TODO: remap sequence to common subsequences
-// TODO: find common suffixes
-// TODO: compress the common suffixes
-// TODO: emit the song with merged dumps and common phrases
-
 void findCommonDumpSequences(
   const std::map<String, DumpSequence> &registerDumps,
   std::map<uint64_t, String> &commonDumpSequences,
@@ -345,97 +339,8 @@ bool compareStart(SuffixTree * a, SuffixTree * b) {
   return a->start < b->start;
 }
 
-/**
- * Compare by score
- */ 
-bool compareScore(Span a, Span b) {
-  return a.score > b.score;
-}
-
-void SuffixTree::gather_repeated_subsequences(
-  const std::vector<AlphaChar> &alphaSequence,
-  std::vector<Span> &uniqueSubsequences,
-  std::vector<Span> &copySequence
-) {
-  // initialize 
-  for (int i = 0; i < alphaSequence.size(); i++) {
-    copySequence.emplace_back(Span(i, 1, 1));
-  }
-  // find maximal repeats
-  const size_t minRepeatDepth = 2;
-  std::vector<SuffixTree *> maximalRepeats;
-  this->gather_left(maximalRepeats, alphaSequence);
-  for (auto x : maximalRepeats) {
-    if (x->depth < minRepeatDepth) {
-      continue;
-    }
-    std::vector<SuffixTree *> leaves;
-    x->gather_leaves(leaves);
-    std::sort(leaves.begin(), leaves.end(), compareStart);
-    // find non-overlapping repeats
-    size_t repeats = 0;
-    for (size_t i = 0, lastEnd = 0; i < leaves.size(); i++) {
-      auto l = leaves[i];
-      if (l->start < lastEnd) {
-        leaves[i] = (SuffixTree *)NULL;
-        continue;
-      }
-      lastEnd = l->start + x->depth;
-      repeats++;
-    }
-    size_t firstCopyStart = leaves[0]->start;
-    size_t length = x->depth;
-    size_t score = length * repeats * 2;
-    size_t overhead = repeats * 2 + 1;
-    if (overhead > score) {
-      continue; // not worth it
-    }
-    uniqueSubsequences.emplace_back(Span(firstCopyStart, length, score));
-    for (auto l : leaves) {
-      if (NULL == l || score <= copySequence[l->start].score) {
-        continue;
-      }
-      copySequence[l->start] = Span(firstCopyStart, length, score);
-    }
-  }
-
-  // BUGBUG: remove overlaps
-
-}
-
 void createAlphabet(
-  const std::map<AlphaCode, String> &commonDumpSequences,
-  std::vector<AlphaCode> &alphabet,
-  std::map<String, AlphaChar> &index
-) {
-  // construct the alphabet
-  alphabet.reserve(commonDumpSequences.size() + 1);
- 
-  alphabet.emplace_back(0);
-  index.emplace("$", 0);
-  for (auto x : commonDumpSequences) {
-    index.emplace(x.second, alphabet.size());
-    alphabet.emplace_back(x.first);
-  }
-}
-
-void translateString(
-    const std::vector<String> &sequence,
-    const std::map<String, String> &representativeMap,
-    const std::map<String, AlphaChar> &index,
-    std::vector<AlphaChar> &alphaSequence
-) {
-    // copy string in alphabet
-    alphaSequence.reserve(sequence.size() + 1); 
-    for (auto key : sequence) {
-      AlphaChar c = index.at(representativeMap.at(key));
-      alphaSequence.emplace_back(c);
-    }
-    alphaSequence.emplace_back(0);
-}
-
-void createAlphabet(
-  const std::map<AlphaCode, unsigned int> &frequencyMap,
+  const std::map<AlphaCode, size_t> &frequencyMap,
   std::vector<AlphaCode> &alphabet,
   std::map<AlphaCode, AlphaChar> &index
 ) {
@@ -498,6 +403,303 @@ SuffixTree * createSuffixTree(
   // produce root 
   return root;
 
+}
+
+struct Path {
+
+  Path * prev;
+  DuplicateSpans * state;
+  Span span;
+  size_t weight;
+
+  Path(int subsong, int channel, size_t start, size_t length) :
+    prev(NULL),
+    state(NULL),
+    span(subsong, channel, start, length),
+    weight(0) {}
+
+};
+
+void compressSequence(
+  SuffixTree *root,
+  int subsong,
+  int channel,
+  const std::vector<AlphaChar> &alphaSequence,
+  std::vector<Span> &copySequence
+) {
+  const size_t minRepeatDepth = 3;
+
+  // find maximal repeats
+  std::vector<std::vector<DuplicateSpans *>> spanStarts;
+  std::vector<std::vector<DuplicateSpans *>> spanMids;
+  std::vector<std::vector<DuplicateSpans *>> spanEnds;
+  spanStarts.resize(alphaSequence.size());
+  spanMids.resize(alphaSequence.size());
+  spanEnds.resize(alphaSequence.size());
+  std::vector<SuffixTree *> maximalRepeats;
+  root->gather_left(maximalRepeats, alphaSequence);
+  std::priority_queue<DuplicateSpans *, std::vector<DuplicateSpans *>, CompareDuplicateSpanWeights> priorityQueue;
+  for (auto x : maximalRepeats) {
+    if (x->depth < minRepeatDepth) {
+      // skip short sequences
+      continue;
+    }
+    std::vector<SuffixTree *> leaves;
+    x->gather_leaves(leaves);
+    std::sort(leaves.begin(), leaves.end(), compareStart);
+    // remove any overlapping repeats
+    size_t repeats = 0;
+    for (size_t i = 0, lastEnd = 0; i < leaves.size(); i++) {
+      auto l = leaves[i];
+      if (l->start < lastEnd) {
+        leaves[i] = (SuffixTree *)NULL;
+        continue;
+      }
+      lastEnd = l->start + x->depth;
+      repeats++;
+    }
+    size_t length = x->depth;
+    size_t uncompressed_size = length * repeats;
+    size_t overhead = length + repeats;
+    if (overhead >= uncompressed_size) {
+      continue; // not worth it
+    }
+    size_t score = uncompressed_size - overhead;
+    DuplicateSpans *duplicates = new DuplicateSpans(length, score);
+    priorityQueue.push(duplicates);
+    for (size_t i = 0; i < leaves.size(); i++) {      
+      auto l = leaves[i];
+      if (NULL == l) continue;
+      duplicates->spans.emplace_back(Span(subsong, channel, l->start, length));
+      AlphaChar charIn = l->start > 0 ? alphaSequence[l->start - 1] : 0;
+      duplicates->in[charIn]++;
+      spanStarts[l->start].emplace_back(duplicates);
+      size_t end = l->start + length;
+      AlphaChar charOut = end < (alphaSequence.size() - 1) ? alphaSequence[end + 1] : 0;
+      duplicates->out[charOut]++;
+      spanEnds[end].emplace_back(duplicates);
+      for (size_t j = l->start; j < end; j++) {
+        spanMids[j].emplace_back(duplicates);
+      }
+    }
+  }
+  
+  std::vector<Path *> paths;
+  Path *start = new Path(subsong, channel, 0, 0);
+  paths.emplace_back(start);
+  std::queue<Path *> solutionQueue;
+  solutionQueue.push(start);
+  std::vector<Path *> solutions;
+  while (!solutionQueue.empty()) {
+    auto path = solutionQueue.front();
+    solutionQueue.pop();
+    logD("searching path %d: %d-%d (%d)", (size_t)path, path->span.start, path->span.length, path->weight);
+    size_t nextStart = path->span.start + path->span.length;
+    if (nextStart >= alphaSequence.size()) {
+      solutions.emplace_back(path);
+      continue;
+    }
+    auto &starts = spanStarts[nextStart];
+    Path *next;
+    if (starts.size() == 0) {
+      if (path->state == NULL) {
+        path->span.length++;
+        logD("extending path %d: %d-%d ", (size_t)path, path->span.start, path->span.length);
+        next = path;
+      } else {
+        next = new Path(subsong, channel, nextStart, 1);
+        logD("new path %d: %d-%d", (size_t)next, nextStart, 1);
+        paths.emplace_back(next);
+        next->prev = path;
+        next->weight = path->weight;
+      }
+      next->weight += 1;
+      solutionQueue.push(next);
+      continue;
+    }
+    for (auto dups : starts) {
+      Path *next = new Path(subsong, channel, nextStart, dups->length);
+      paths.emplace_back(next);
+      logD("sub path %d: %d-%d", (size_t)next, next->span.start, next->span.length);
+      next->prev = path;
+      next->state = dups;
+      next->weight = path->weight;
+      if (dups->spans[0].start == nextStart) {
+        next->weight += dups->length;
+      } else {
+        next->weight += 1;
+      }
+      solutionQueue.push(next);
+    }
+  }
+  
+  for (auto path : solutions) {
+    logD("path: %d", path->weight);
+  }
+
+  for (auto path : paths) {
+    delete path;
+  }
+  
+
+  size_t uniqueSpans = 0;
+  size_t minRepeats = 0;
+  size_t minTransitions = 0;
+  double minTransitionBits = 0;
+  for (size_t i = 0; i < alphaSequence.size(); i++) {
+    auto &mids = spanMids[i];
+    logD("seq: %d [%d] - spans: %d", i, alphaSequence[i], mids.size());
+    if (mids.size() == 0) {
+      uniqueSpans++;
+    }
+    auto &ends = spanEnds[i];
+    for (auto dups : ends) {
+      logD(" end: %d - weight: %d spans: %d in: %d out: %d", dups->length, dups->weight, dups->spans.size(), dups->in.size(), dups->out.size());
+    }
+    auto &starts = spanStarts[i];
+    DuplicateSpans *minCandidate = NULL;
+    for (auto dups : starts) {
+      if (minCandidate == NULL || minCandidate->length > dups->length) {
+        minCandidate = dups;
+      }
+      logD(" start: %d - weight: %d spans: %d in: %d out: %d", dups->length, dups->weight, dups->spans.size(), dups->in.size(), dups->out.size());
+    }
+    if (minCandidate != NULL) {
+      if (minCandidate->spans[0].start == i) {
+        minRepeats += minCandidate->length + 1;
+      }
+      minTransitions += 1;
+      size_t maxTransitions = spanMids[i].size();
+      if (maxTransitions < minCandidate->in.size()) {
+        maxTransitions = minCandidate->in.size();
+      }
+      if (maxTransitions < minCandidate->out.size()) {
+        maxTransitions = minCandidate->out.size();
+      }
+      minTransitionBits += log2(maxTransitions);
+
+    }
+  }
+  size_t totalSizeEstimate = uniqueSpans + minRepeats + (minTransitionBits / 8);
+  logD("codes: %d estimate: %d unique:%d minRepeats: %d minTransitions: %d minTransitionBits: %f",
+        alphaSequence.size(), totalSizeEstimate, uniqueSpans, minRepeats, minTransitions, minTransitionBits);
+
+  // initialize 
+  copySequence.reserve(alphaSequence.size());
+  for (size_t i = 0; i < alphaSequence.size(); i++) {
+    copySequence.emplace_back(Span(subsong, channel, i, 0));
+  }
+
+  while (priorityQueue.size() > 0) {
+    // take the topmost set of duplicate spans
+    auto top = priorityQueue.top();
+    priorityQueue.pop();
+
+    // check how many spans are still maximal
+    size_t nonMaximalSpans = 0;
+    for (size_t i = 0; i < top->spans.size(); i++) {
+      auto &span = top->spans[i];
+      size_t spanEnd = span.start + span.length;
+      bool isMaximal = true;
+      for (size_t j = span.start; isMaximal && j < spanEnd; j++) {
+        if (copySequence[j].length > 0) {
+          isMaximal = false;
+        }
+      }
+      if (!isMaximal) {
+        if (top->weight < span.length) {
+          // no spans are valid
+          top->weight = 0;
+          break;
+
+        }
+        // take this span out of consideration
+        top->weight -= span.length;
+        span.length = 0;
+        nonMaximalSpans++;
+      }
+    }
+
+    // check if the total weight has changed
+    if (0 == top->weight) {
+      // dispose
+      delete top;
+      continue;
+
+    } else if ((nonMaximalSpans > 0) && (priorityQueue.size() > 0) && (priorityQueue.top()->weight > top->weight)) {
+      // candidate is no longer the most valuable, defer processing
+      priorityQueue.push(top);
+      continue;
+
+    } 
+
+    // apply compression
+    logD("compressing: %d - weight: %d spans: %d in: %d out: %d", top->length, top->weight, top->spans.size(), top->in.size(), top->out.size());
+
+    bool firstCopy = true;
+    size_t firstCopyStart;
+    for (size_t i = 0; i < top->spans.size(); i++) {
+      auto &span = top->spans[i];
+      if (0 == span.length) {
+        // skip invalid spans
+        continue;
+      }
+      size_t spanEnd = span.start + span.length;
+      if (firstCopy) {
+        // head of the first span marked as a literal span
+        firstCopy = false;
+        firstCopyStart = span.start;
+        copySequence[span.start] = span;
+
+      } else {
+        // heads of subsequent spans marked as references to first span
+        copySequence[span.start] = Span(subsong, channel, firstCopyStart, span.length);
+
+      }
+      // fill in the tail of the span as individual literal elements
+      for (size_t j = span.start + 1; j < spanEnd; j++) {
+        copySequence[j].length = 1;
+      }
+    }
+    delete top;
+  }
+
+  // mark any untouched spans as individual literal elements
+  for (size_t i = 0; i < copySequence.size(); i++) {
+    if (0 == copySequence[i].length) copySequence[i].length = 1;
+  }
+
+}
+
+void createAlphabet(
+  const std::map<AlphaCode, String> &commonDumpSequences,
+  std::vector<AlphaCode> &alphabet,
+  std::map<String, AlphaChar> &index
+) {
+  // construct the alphabet
+  alphabet.reserve(commonDumpSequences.size() + 1);
+ 
+  alphabet.emplace_back(0);
+  index.emplace("$", 0);
+  for (auto x : commonDumpSequences) {
+    index.emplace(x.second, alphabet.size());
+    alphabet.emplace_back(x.first);
+  }
+}
+
+void translateString(
+    const std::vector<String> &sequence,
+    const std::map<String, String> &representativeMap,
+    const std::map<String, AlphaChar> &index,
+    std::vector<AlphaChar> &alphaSequence
+) {
+    // copy string in alphabet
+    alphaSequence.reserve(sequence.size() + 1); 
+    for (auto key : sequence) {
+      AlphaChar c = index.at(representativeMap.at(key));
+      alphaSequence.emplace_back(c);
+    }
+    alphaSequence.emplace_back(0);
 }
 
 void testCommonSubsequences(const String &input) {
