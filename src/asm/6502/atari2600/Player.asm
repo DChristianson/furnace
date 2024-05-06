@@ -271,8 +271,6 @@ waitOnVBlank_loop
             stx COLUPF
             inx ; x = 1
             stx CTRLPF ; reflect playfield
-            lda #$f0
-            sta PF0
 
             lda #12
 vis_loop
@@ -280,11 +278,13 @@ vis_loop
             ldy #31
 gradient_loop
             sta WSYNC               ;--
-            SLEEP 17
-            tya
-            lsr
-            ora vis_gradient,x      ;4  23
-            sta COLUBK              ;3  29 
+            lda #$f0                ;2   2
+            sta PF0                 ;3   5
+            SLEEP 12                ;12 17
+            tya                     ;2  19
+            lsr                     ;2  21
+            ora vis_gradient,x      ;4  25
+            sta COLUBK              ;3  28 
             tya
             lsr
             ora vis_gradient + 1,x  ;4  23

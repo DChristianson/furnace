@@ -32,62 +32,38 @@ const unsigned char DEFAULT_STACK_DEPTH  = 2;
 const unsigned char DEFAULT_LITERAL_DICTIONARY_SIZE = 64;
 const unsigned char DEFAULT_SEQUENCE_DICTIONARY_SIZE = 64;
 
+enum DivExportTIAType {
+  DIV_EXPORT_TIA_SIMPLE,
+  DIV_EXPORT_TIA_COMPACT
+};
 
 class DivExportAtari2600 : public DivROMExport {
   
   void writeWaveformHeader(SafeWriter* w, const char* key);
+
+  DivExportTIAType compressionLevel = DIV_EXPORT_TIA_COMPACT; 
 
   size_t stackDepth = DEFAULT_STACK_DEPTH;
   size_t literalDictionarySize = DEFAULT_LITERAL_DICTIONARY_SIZE;
   size_t sequenceDictionarySize = DEFAULT_SEQUENCE_DICTIONARY_SIZE;
 
   size_t writeTextGraphics(SafeWriter* w, const char* value);
-  size_t writeNoteF0(SafeWriter* w, const ChannelState& next, const char duration, const ChannelState& last);
-  size_t writeNoteF1(SafeWriter* w, const ChannelState& next, const char duration, const ChannelState& last);
-  
-  void writeAlphaCodesToChannel(
-    int channel,
-    const TiaRegisterMask &registerMask,
-    int *values,
-    int framesToWrite,
-    std::vector<AlphaCode> &codeSequence
-  ); 
 
-  // frame by frame reg dump
-  // frame by frame column dump
-  // frame by frame column delta dump
-  // rle reg dump
-  // rle column delta dump
-  
-  // song structure + custom reg + delta A (ROM)
-  void writeTrackDataV1(
-    DivEngine* e, 
-    std::map<uint64_t, String> &commonDumpSequences,
-    std::map<uint64_t, unsigned int> &frequencyMap,
-    std::map<String, String> &representativeMap,
-    std::map<String, DumpSequence> &registerDumps,
+  // simple register dump
+  void writeTrackDataSimple(
+    std::vector<RegisterWrite> &registerWrites,
     std::vector<DivROMExportOutput> &ret
   );
 
-  // run length encoded register dump
-  void writeTrackData(
+  // compacted encoding
+  void writeTrackDataCompact(
     DivEngine* e, 
     std::vector<RegisterWrite> &registerWrites,
     std::vector<DivROMExportOutput> &ret
   );
 
-  void encodeCopySequence(
-    const std::vector<AlphaCode> &sequence, 
-    const Span &bounds,
-    const std::vector<Span> &copySequence,
-    std::vector<AlphaCode> &encodedSequence);
-
-  void encodeDeltaSequence(
-    const std::vector<AlphaCode> &sequence, 
-    const Span &bounds,
-    std::vector<AlphaCode> &encodedSequence);
-
-  size_t writeAlphaCode(SafeWriter* w, SafeWriter* b, AlphaCode code, const std::map<AlphaCode, size_t> &commandDictionary);
+  size_t writeNoteF0(SafeWriter* w, const ChannelState& next, const char duration, const ChannelState& last);
+  size_t writeNoteF1(SafeWriter* w, const ChannelState& next, const char duration, const ChannelState& last);
 
 public:
 

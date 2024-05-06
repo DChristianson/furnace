@@ -61,17 +61,19 @@ _audio_next_note
             lda (audio_waveform_ptr),y
             beq _audio_advance_tracker ; check for zero 
             lsr                        ; pull first bit
-            bcc _set_registers         ; if set go to load registers
+            bcc _set_registers         ; if clear go to load registers
             lsr                        ; check second bit
             bcc _set_cx_vx             ; if clear we are loading aud(c|v)x
             lsr                        ; pull duration bit for later set
             sta audio_fx,x             ; store frequency
             jmp _set_timer_delta       ; jump to duration 
 _set_cx_vx  lsr
-            bcc _set_vx
+            bcc _set_vx ; BUGBUG broken
+            lsr
             sta audio_cx,x
             jmp _set_timer_delta       ; jump to duration
 _set_vx
+            lsr
             sta audio_vx,x
 _set_timer_delta
             lda #0

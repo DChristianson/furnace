@@ -23,7 +23,10 @@
 #include "../engine.h"
 
 const int TICKS_PER_SECOND = 1000000;
-const int TICKS_AT_60HZ = TICKS_PER_SECOND / 60;
+
+typedef uint64_t AlphaCode;
+typedef uint64_t SpanCode;
+typedef int AlphaChar;
 
 struct PatternIndex {
   String key;
@@ -84,19 +87,20 @@ inline auto getPatternKey(unsigned short subsong, unsigned short channel, unsign
   );
 }
 
+const size_t CHANNEL_REGISTERS = 4;
+
 struct ChannelState {
 
-  unsigned char registers[4];
-  // BUGBUG: make this a uint
+  unsigned char registers[CHANNEL_REGISTERS];
 
   ChannelState() {}
 
   ChannelState(unsigned char c) {
-    memset(registers, c, 4);
+    memset(registers, c, CHANNEL_REGISTERS);
   }
 
   ChannelState(const ChannelState &c) {
-    memcpy(registers, c.registers, 4);
+    memcpy(registers, c.registers, CHANNEL_REGISTERS);
   }
 
   bool write(unsigned int address, unsigned int value) {
@@ -106,9 +110,16 @@ struct ChannelState {
     return true;
   }
 
+  bool equals(const ChannelState &c) {
+    for (size_t i = 0; i < CHANNEL_REGISTERS; i++) {
+      if (registers[i] != c.registers[i]) return false;
+    }
+    return true;
+  }
+
   uint64_t hash() const {
     uint64_t h = 0;
-    for (int i = 0; i < 4; i++) {
+    for (size_t i = 0; i < CHANNEL_REGISTERS; i++) {
       h = ((uint64_t)registers[i]) + (h << 8);
     }
     return h;
@@ -117,48 +128,53 @@ struct ChannelState {
 };
 
 
-
 /**
- * Dumped register values held over time
+ * ChannelState + time interval
  */
-struct DumpInterval {
+struct ChannelStateInterval {
 
   ChannelState state;
-  char duration;
+  int duration;
 
-  DumpInterval() {}
+  ChannelStateInterval(const ChannelStateInterval &n) : state(n.state), duration(n.duration) {}
 
-  DumpInterval(const DumpInterval &n) : state(n.state), duration(n.duration) {}
-
-  DumpInterval(const ChannelState &state) : state(state), duration(-1) {}
+  ChannelStateInterval(const ChannelState &state, int duration) : state(state), duration(duration) {}
 
   uint64_t hash() const {
     uint64_t h = state.hash();
-    h += ((uint64_t)duration << 56);
+    h += ((uint64_t)duration << ((CHANNEL_REGISTERS + 1) * 8));
     return h;
   }
 
 }; 
 
 /**
- * Sequences of register dumps
+ * Sequence of channel states
  */
-struct DumpSequence {
+struct ChannelStateSequence {
 
   ChannelState initialState;
-  std::vector<DumpInterval> intervals;
+  std::vector<ChannelStateInterval> intervals;
 
-  void dumpRegisters(const ChannelState &state) {
-    intervals.emplace_back(DumpInterval(state));
+
+  ChannelStateSequence() : initialState(255) {}
+  ChannelStateSequence(const ChannelState &initialState) : initialState(initialState) {}
+
+  void updateState(const ChannelState &state) {
+    if (intervals.size() > 0 && intervals.back().state.equals(state)) {
+      // ignore state update if it represents no change
+      return;
+    }
+    intervals.emplace_back(ChannelStateInterval(state, 0));
   }
 
-  DumpSequence() : initialState(255) {}
-  DumpSequence(const ChannelState &initialState) : initialState(initialState) {}
-
-  int writeDuration(const int ticks, const int remainder, const int freq) {
+  int addDuration(const int ticks, const int remainder, const int freq) {
+    if (intervals.size() == 0) {
+      intervals.emplace_back(ChannelStateInterval(ChannelState(0), 0));
+    }
     int total = ticks + remainder;
     int cycles = total / freq;
-    intervals.back().duration = cycles;
+    intervals.back().duration += cycles;
     return total - (cycles * freq);
   }
 
@@ -183,19 +199,23 @@ struct DumpSequence {
 
 };
 
+/**
+ * Capture of register write
+ */
 struct RegisterWrite {
 
-  int nextTickCount;
+  int writeIndex;
   RowIndex rowIndex;
   int systemIndex;
   DivSystem system;
   int seconds;
   int ticks;
+  float hz;
   int addr;
   int val;
 
   RegisterWrite(
-    int nextTickCount,
+    int writeIndex,
     unsigned short subsong,
     unsigned short ord,
     unsigned short row,
@@ -203,22 +223,24 @@ struct RegisterWrite {
     DivSystem currentSystem,
     int totalSeconds,
     int totalTicks,
+    float hz,
     int addr,
     int val
   ):
-    nextTickCount(nextTickCount),
+    writeIndex(writeIndex),
     rowIndex(subsong, ord, row),
     systemIndex(systemIndex),
     system(currentSystem),
     seconds(totalSeconds),
     ticks(totalTicks),
+    hz(hz),
     addr(addr),
     val(val) {}
 
 };
 
 /**
- * Extract all register writes in a song for analysis.
+ * Extract all register writes in a song.
  */
 void registerDump(
   DivEngine* e, 
@@ -227,204 +249,39 @@ void registerDump(
 );
 
 /**
- * Extract all register dump sequences in a song.
- * Each sequence is keyed on subsong, ord, row and channel.
- * Depending on the system different channels may map the platform
- * address space to different channel registers.
+ * Extract channel states from register writes.
  */
-void captureSequence(
-  DivEngine* e, 
+void writeChannelStateSequence(
+  const std::vector<RegisterWrite> &writes,
   int subsong,
   int channel,
-  DivSystem system, 
-  std::map<unsigned int, unsigned int> &addressMap,
-  std::vector<String> &sequence,
-  std::map<String, DumpSequence> &registerDumps 
+  int systemIndex,
+  const std::map<unsigned int, unsigned int> &addressMap,
+  ChannelStateSequence &dumpSequence 
 );
 
-void findCommonDumpSequences(
-  const std::map<String, DumpSequence> &registerDumps,
-  std::map<uint64_t, String> &commonDumpSequences,
+/**
+ * Extract channel states in a song, keyed on subsong, ord, row and channel.
+ */
+void writeChannelStateSequenceByRow(
+  const std::vector<RegisterWrite> &writes,
+  int subsong,
+  int channel,
+  int systemIndex,
+  const std::map<unsigned int, unsigned int> &addressMap,
+  std::vector<String> &sequence,
+  std::map<String, ChannelStateSequence> &registerDumps 
+);
+
+/**
+ * Deduplicate channel state sequences by hash code
+ */
+void findCommonSequences(
+  const std::map<String, ChannelStateSequence> &registerDumps,
+  std::map<uint64_t, String> &commonSequences,
   std::map<uint64_t, unsigned int> &frequencyMap,
   std::map<String, String> &representativeMap
 );
 
-typedef uint64_t AlphaCode;
-typedef uint64_t SpanCode;
-typedef int AlphaChar;
-
-struct Span {
-
-  int    subsong;
-  int    channel;
-  size_t start;
-  size_t length;
-
-  Span(int subsong, int channel, size_t start, size_t length) :
-    subsong(subsong),
-    channel(channel),
-    start(start),
-    length(length) {}
-
-};
-
-class CompareFrequencies {
- public:
-
-  bool operator()(const std::pair<AlphaCode, size_t> &a, const const std::pair<AlphaCode, size_t> &b) const
-  {
-    if (a.second != b.second) return a.second > b.second;
-    return a.first < b.first;
-  } 
-
-};
-
-class CompareSpans {
-public:
-
-  bool operator()(const Span &a, const Span &b) const
-  {
-    if (a.subsong != b.subsong) return a.subsong < b.subsong;
-    if (a.channel != b.channel) return a.channel < b.channel;
-    if (a.start != b.start) return a.start < b.start;
-    return a.length < b.length;
-  }
-};
-
-/**
- * Collection of duplicate spans
- */
-struct DuplicateSpans {
-
-  std::vector<Span> spans;
-  size_t length;
-  size_t weight;
-  std::map<AlphaChar, size_t> in;
-  std::map<AlphaChar, size_t> out;
-
-  DuplicateSpans(size_t length, size_t weight) : length(length), weight(weight) {}
-
-};
-
-/**
- * Compare duplicates by length
- */
-class CompareDuplicateLengths {
-public:
-
-  bool operator()(DuplicateSpans * a, DuplicateSpans * b) const {
-    if (a->length != b->length) return a->length < b->length;
-    if (a->weight != b->weight) return a->weight < b->weight;
-    return a < b;
-  }
-
-};
-
-/**
- * Compare duplicates by weight
- */
-class CompareDuplicateSpanWeights {
-public:
-
-  bool operator()(DuplicateSpans * a, DuplicateSpans * b) const {
-    if (a->weight != b->weight) return a->weight < b->weight;
-    if (a->length != b->length) return a->length < b->length;
-    return a < b;
-  }
-
-};
-
-struct SuffixTree {
-
-  SuffixTree *parent;
-  SuffixTree *slink;
-  std::vector<SuffixTree *> children;
-  bool isLeaf;
-  size_t start;
-  size_t depth;
-
-  SuffixTree(size_t alphabetSize, size_t d) : parent(NULL), slink(NULL), isLeaf(true), start(0), depth(d) {
-    children.resize(alphabetSize);
-    for (size_t i = 0; i < alphabetSize; i++) {
-      children[i] = NULL;
-    }
-  }
-
-  ~SuffixTree() {
-    for (auto x : children) {
-      delete x;
-    }
-  }
-
-  SuffixTree *splice_node(size_t d, const std::vector<AlphaChar> &S);
-
-  SuffixTree *add_leaf(size_t i, size_t d, const std::vector<AlphaChar> &S);
-
-  void compute_slink(const std::vector<AlphaChar> &S);
-
-  size_t substring_start() const;
-
-  size_t substring_end() const;
-
-  size_t substring_len() const;
-
-  SuffixTree *find(const std::vector<AlphaChar> &K, const std::vector<AlphaChar> &S);
-
-  /**
-   * @brief find all the leaves in this node's subtree
-   * 
-   * @param leaves 
-   * @return size_t 
-   */
-  size_t gather_leaves(std::vector<SuffixTree *> &leaves);
-
-  SuffixTree *find_maximal_substring();
-
-  /**
-   * @brief gather all the left diverse nodes in this node's subtree
-   *
-   * a node is left diverse when at least two leaves in its subtree have different left characters
-   * 
-   * @param nodes 
-   * @param S - reference string
-   * @return AlphaChar 
-   */
-  AlphaChar gather_left(std::vector<SuffixTree *> &nodes, const std::vector<AlphaChar> &S);
-
-};
-
-void createAlphabet(
-  const std::map<AlphaCode, size_t> &frequencyMap,
-  std::vector<AlphaCode> &alphabet,
-  std::map<AlphaCode, AlphaChar> &index
-);
-
-SuffixTree * createSuffixTree(
-  const std::vector<AlphaCode> &alphabet,
-  const std::vector<AlphaChar> &alphaSequence
-);
-
-void compressSequence(
-  SuffixTree *root,
-  int subsong,
-  int channel,
-  const std::vector<AlphaChar> &alphaSequence,
-  std::vector<Span> &copySequence
-);
-
-void createAlphabet(
-  const std::map<AlphaCode, String> &commonDumpSequences,
-  std::vector<AlphaCode> &alphabet,
-  std::map<String, AlphaChar> &index
-);
-
-void translateString(
-  const std::vector<String> &sequence,
-  const std::map<String, String> &representativeMap,
-  const std::map<String, AlphaChar> &index,
-  std::vector<AlphaChar> &alphaSequence
-);
-
-void testCommonSubsequences(const String &input);
 
 #endif // _REGISTERDUMP_H
