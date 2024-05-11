@@ -59,27 +59,18 @@ std::vector<DivROMExportOutput> DivExportAtari2600::go(DivEngine* e) {
   std::vector<RegisterWrite> registerWrites;
   registerDump(e, 0, registerWrites);
 
-  // debugging: dump all register writes
-  logD("writing register dump");
-  SafeWriter* dump = new SafeWriter;
-  dump->init();
-  for (auto &write : registerWrites) {
-    dump->writeText(fmt::sprintf("%d %d %d:SS%d ORD%d ROW%d SYS%d> %d = %d\n",
-      write.writeIndex,
-      write.seconds,
-      write.ticks,
-      write.rowIndex.subsong,
-      write.rowIndex.ord,
-      write.rowIndex.row,
-      write.systemIndex,
-      write.addr,
-      write.val
-    ));
+  // write track data
+  switch (exportType) {
+    case DIV_EXPORT_TIA_DUMP:
+      writeTrackDataDump(e, registerWrites, ret);
+      break;
+    case DIV_EXPORT_TIA_SIMPLE:
+      writeTrackDataSimple(e, registerWrites, ret);
+      break;
+    case DIV_EXPORT_TIA_COMPACT:
+      writeTrackDataCompact(e, registerWrites, ret);
+      break;
   }
-  ret.push_back(DivROMExportOutput("Track_dump.txt", dump));
-
-  // write actual track data
-  writeTrackDataCompact(e, registerWrites, ret);
 
   // create meta data (optional)
   logD("writing track title graphics");
@@ -106,23 +97,74 @@ std::vector<DivROMExportOutput> DivExportAtari2600::go(DivEngine* e) {
 
 }
 
+void DivExportAtari2600::writeTrackDataDump(
+  DivEngine* e, 
+  std::vector<RegisterWrite> &registerWrites,
+  std::vector<DivROMExportOutput> &ret
+) {
+  // debugging: dump all register writes
+  logD("writing register dump");
+  SafeWriter* dump = new SafeWriter;
+  dump->init();
+  for (auto &write : registerWrites) {
+    dump->writeText(fmt::sprintf("%d %d %d:SS%d ORD%d ROW%d SYS%d> %d = %d\n",
+      write.writeIndex,
+      write.seconds,
+      write.ticks,
+      write.rowIndex.subsong,
+      write.rowIndex.ord,
+      write.rowIndex.row,
+      write.systemIndex,
+      write.addr,
+      write.val
+    ));
+  }
+  ret.push_back(DivROMExportOutput("Track_dump.txt", dump));
+}
+
 // simple register dump
 void DivExportAtari2600::writeTrackDataSimple(
+  DivEngine* e, 
   std::vector<RegisterWrite> &registerWrites,
   std::vector<DivROMExportOutput> &ret
 ) {
 
-  logD("performing sequence dump");
-  ChannelStateSequence dumpSequences[2];
+  SafeWriter* trackData=new SafeWriter;
+  trackData->init();
+  trackData->writeText(fmt::sprintf("; Song: %s\n", e->song.name));
+  trackData->writeText(fmt::sprintf("; Author: %s\n", e->song.author));
+
   for (int channel = 0; channel < 2; channel++) {
+    ChannelStateSequence dumpSequence;
+
     writeChannelStateSequence(
       registerWrites,
       0,
       channel,
       0,
       channel == 0 ? channel0AddressMap : channel1AddressMap,
-      dumpSequences[channel]);
+      dumpSequence);
+
+    size_t waveformDataSize = 0;
+    size_t totalFrames = 0;
+    trackData->writeC('\n');
+    trackData->writeText(fmt::sprintf("CHANNEL_%d\n", channel));
+    for (auto& n: dumpSequence.intervals) {
+      trackData->writeText(fmt::sprintf("    byte %d, %d, %d, %d\n",
+        n.state.registers[0],
+        n.state.registers[1],
+        n.state.registers[2],
+        n.duration
+      ));
+      waveformDataSize += 4;
+      totalFrames += n.duration;
+    }
+    trackData->writeText("    byte 0\n");
+    waveformDataSize++;
+    trackData->writeText(fmt::sprintf("    ; %d bytes %d frames", waveformDataSize, totalFrames));
   }
+
+  ret.push_back(DivROMExportOutput("Track_simple.asm", trackData));
 
 }
 
@@ -217,6 +259,7 @@ void DivExportAtari2600::writeTrackDataCompact(
         String key = getPatternKey(i, k, p);
         trackData->writeText(key);
         songDataSize++;
+
         if (alreadyAdded[k][p]) continue;
         patterns.push_back(PatternIndex(key, i, j, k, p));
         alreadyAdded[k][p] = true;
@@ -226,7 +269,7 @@ void DivExportAtari2600::writeTrackDataCompact(
     trackData->writeText("    byte 255\n");
     songDataSize++;
   }
-
+  
   // pattern lookup
   size_t patternTableSize = 0;
   trackData->writeC('\n');
@@ -265,7 +308,7 @@ void DivExportAtari2600::writeTrackDataCompact(
       } else {
         trackData->writeText(",");
       }
-      trackData->writeText(representativeMap[key]); // the representative
+      trackData->writeText(rr->second); // the representative
       patternDataSize++;
     }
     trackData->writeText("\n    byte 255\n");
