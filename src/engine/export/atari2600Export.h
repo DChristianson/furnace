@@ -33,15 +33,14 @@ const unsigned char DEFAULT_LITERAL_DICTIONARY_SIZE = 64;
 const unsigned char DEFAULT_SEQUENCE_DICTIONARY_SIZE = 64;
 
 enum DivExportTIAType {
+  DIV_EXPORT_TIA_DUMP,
   DIV_EXPORT_TIA_SIMPLE,
   DIV_EXPORT_TIA_COMPACT
 };
 
 class DivExportAtari2600 : public DivROMExport {
-  
-  void writeWaveformHeader(SafeWriter* w, const char* key);
 
-  DivExportTIAType compressionLevel = DIV_EXPORT_TIA_COMPACT; 
+  DivExportTIAType exportType = DIV_EXPORT_TIA_COMPACT; 
 
   size_t stackDepth = DEFAULT_STACK_DEPTH;
   size_t literalDictionarySize = DEFAULT_LITERAL_DICTIONARY_SIZE;
@@ -49,8 +48,18 @@ class DivExportAtari2600 : public DivROMExport {
 
   size_t writeTextGraphics(SafeWriter* w, const char* value);
 
-  // simple register dump
+  void writeWaveformHeader(SafeWriter* w, const char* key);
+
+  // raw data dump
+  void writeTrackDataDump(
+    DivEngine* e, 
+    std::vector<RegisterWrite> &registerWrites,
+    std::vector<DivROMExportOutput> &ret
+  );
+
+  // uncompressed run length encoding
   void writeTrackDataSimple(
+    DivEngine* e, 
     std::vector<RegisterWrite> &registerWrites,
     std::vector<DivROMExportOutput> &ret
   );
