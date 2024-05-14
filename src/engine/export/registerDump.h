@@ -103,6 +103,11 @@ struct ChannelState {
     memcpy(registers, c.registers, CHANNEL_REGISTERS);
   }
 
+  ChannelState& operator=(ChannelState& c) {
+    memcpy(registers, c.registers, CHANNEL_REGISTERS);
+    return *this;
+  }
+
   bool write(unsigned int address, unsigned int value) {
     unsigned char v = (unsigned char)value;
     if (registers[address] == v) return false;
@@ -204,7 +209,7 @@ struct ChannelStateSequence {
  */
 struct RegisterWrite {
 
-  int writeIndex;
+  long writeIndex;
   RowIndex rowIndex;
   int systemIndex;
   DivSystem system;
@@ -215,7 +220,7 @@ struct RegisterWrite {
   int val;
 
   RegisterWrite(
-    int writeIndex,
+    long writeIndex,
     unsigned short subsong,
     unsigned short ord,
     unsigned short row,

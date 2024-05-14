@@ -59,6 +59,7 @@ audio_registers
 audio_cx            ds 2  ; 
 audio_fx            ds 2  ; 
 audio_vx            ds 2
+audio_register_end
 
 
 audio_stack_ptr     ds 2
@@ -88,6 +89,7 @@ CleanStart
             CLEAN_START
 
             ; load track
+            ldy #0
             jsr sub_start_song
             ; playback speed
             lda #1

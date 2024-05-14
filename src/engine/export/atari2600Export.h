@@ -22,52 +22,43 @@
 
 #include "../engine.h"
 #include "registerDump.h"
-#include <bitset>
-
-const size_t NUM_TIA_REGISTERS = 6;
-
-typedef std::bitset<NUM_TIA_REGISTERS> TiaRegisterMask;
-
-const unsigned char DEFAULT_STACK_DEPTH  = 2;
-const unsigned char DEFAULT_LITERAL_DICTIONARY_SIZE = 64;
-const unsigned char DEFAULT_SEQUENCE_DICTIONARY_SIZE = 64;
 
 enum DivExportTIAType {
-  DIV_EXPORT_TIA_DUMP,
   DIV_EXPORT_TIA_SIMPLE,
   DIV_EXPORT_TIA_COMPACT
 };
 
 class DivExportAtari2600 : public DivROMExport {
 
+  // BUGBUG: allow setting options
   DivExportTIAType exportType = DIV_EXPORT_TIA_COMPACT; 
-
-  size_t stackDepth = DEFAULT_STACK_DEPTH;
-  size_t literalDictionarySize = DEFAULT_LITERAL_DICTIONARY_SIZE;
-  size_t sequenceDictionarySize = DEFAULT_SEQUENCE_DICTIONARY_SIZE;
+  bool debugRegisterDump = true;
 
   size_t writeTextGraphics(SafeWriter* w, const char* value);
 
   void writeWaveformHeader(SafeWriter* w, const char* key);
 
   // raw data dump
-  void writeTrackDataDump(
+  void writeRegisterDump(
     DivEngine* e, 
-    std::vector<RegisterWrite> &registerWrites,
+    std::vector<RegisterWrite> *registerWrites,
     std::vector<DivROMExportOutput> &ret
   );
 
-  // uncompressed run length encoding
+  // uncompressed encoding 
+  // 1 byte per register
+  // optionally use 1 byte to encode duration
   void writeTrackDataSimple(
     DivEngine* e, 
-    std::vector<RegisterWrite> &registerWrites,
+    bool encodeDuration,
+    std::vector<RegisterWrite> *registerWrites,
     std::vector<DivROMExportOutput> &ret
   );
 
-  // compacted encoding
+  // compacted encoding 
   void writeTrackDataCompact(
     DivEngine* e, 
-    std::vector<RegisterWrite> &registerWrites,
+    std::vector<RegisterWrite> *registerWrites,
     std::vector<DivROMExportOutput> &ret
   );
 
