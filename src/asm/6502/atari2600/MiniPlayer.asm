@@ -57,6 +57,7 @@ audio_registers
 audio_cx = AUDC0
 audio_fx = AUDF0 
 audio_vx = AUDV0
+audio_register_end
 
 ; ----------------------------------
 ; code

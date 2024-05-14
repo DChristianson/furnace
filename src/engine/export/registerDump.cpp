@@ -101,7 +101,7 @@ void writeChannelStateSequence(
   ChannelStateSequence &dumpSequence 
 ) {
 
-  int lastWriteIndex = -1;
+  long lastWriteIndex = -1;
   int lastWriteTicks = 0;
   int lastWriteSeconds = 0;
   int deltaTicksR = 0;
@@ -110,7 +110,7 @@ void writeChannelStateSequence(
   ChannelState currentState(0);
   for (auto &write : writes) {
     
-    int currentWriteIndex = write.writeIndex;
+    long currentWriteIndex = write.writeIndex;
     int currentTicks = write.ticks;
     int currentSeconds = write.seconds;
     int freq = ((float)TICKS_PER_SECOND) / write.hz;
@@ -159,7 +159,7 @@ void writeChannelStateSequenceByRow(
   std::map<String, ChannelStateSequence> &registerDumps 
 ) {
   
-  int lastWriteIndex = -1;
+  long lastWriteIndex = -1;
   int lastWriteTicks = 0;
   int lastWriteSeconds = 0;
   int deltaTicksR = 0;
@@ -172,7 +172,7 @@ void writeChannelStateSequenceByRow(
   
   for (auto &write : writes) {
     
-    int currentWriteIndex = write.writeIndex;
+    long currentWriteIndex = write.writeIndex;
     int currentTicks = write.ticks;
     int currentSeconds = write.seconds;
     int freq = ((float)TICKS_PER_SECOND) / write.hz;

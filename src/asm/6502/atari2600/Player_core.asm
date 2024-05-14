@@ -1,32 +1,30 @@
 sub_inc_song
-            lda audio_song
-            clc
-            adc #1
-            cmp #NUM_SONGS
-            bcc _inc_song_save
-            lda #0
-_inc_song_save
-            sta audio_song
-            rts
+            ldy audio_song
+            iny
+            cpy #NUM_SONGS
+            bne _song_save
+            ldy #0
+            jmp _song_save
 
 sub_dec_song
-            lda audio_song
-            sec
-            sbc #1
-            bcs _dec_song_save
-            lda #(NUM_SONGS - 1)
-_dec_song_save
-            sta audio_song
-            rts
+            ldy audio_song
+            dey
+            bpl _song_save
+            ldy #(NUM_SONGS - 1)
+_song_save
+            sty audio_song
 
 sub_start_song
-            lda audio_song
             lda SONG_TABLE_START_LO,y
             sta audio_song_ptr
             lda SONG_TABLE_START_HI,y
             sta audio_song_ptr + 1
             ldy #0
-            sty audio_row_idx
+            ldx #(audio_register_end - audio_row_idx)
+_song_clean_loop
+            sty audio_pattern_idx,x
+            dex
+            bpl _song_clean_loop
             lda (audio_song_ptr),y
             sta audio_pattern_idx
             iny
