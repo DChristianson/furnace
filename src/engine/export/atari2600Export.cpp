@@ -52,6 +52,23 @@ const char* TiaRegisterNames[] = {
   "AUDV1"
 };
 
+DivExportAtari2600::DivExportAtari2600(DivEngine *e) {
+  String exportTypeString = e->getConfString("romout.tiaExportType", "COMPACT");
+  logD("retrieving config exportType [%s]", exportTypeString);
+  if (exportTypeString == "RAW") {
+    exportType = DIV_EXPORT_TIA_RAW;
+  } else if (exportTypeString == "BASIC") {
+    exportType = DIV_EXPORT_TIA_BASIC;
+  } else if (exportTypeString == "BASICX") {
+    exportType = DIV_EXPORT_TIA_BASICX;
+  } else if (exportTypeString == "DELTA") {
+    exportType = DIV_EXPORT_TIA_DELTA;
+  } else if (exportTypeString == "COMPACT") {
+    exportType = DIV_EXPORT_TIA_COMPACT;
+  }
+  debugRegisterDump = e->getConfBool("romout.debugOutput", false);
+}
+
 std::vector<DivROMExportOutput> DivExportAtari2600::go(DivEngine* e) {
   std::vector<DivROMExportOutput> ret;
 
@@ -59,7 +76,7 @@ std::vector<DivROMExportOutput> DivExportAtari2600::go(DivEngine* e) {
   const size_t numSongs = e->song.subsong.size();
   std::vector<RegisterWrite> registerWrites[numSongs];
   for (size_t subsong = 0; subsong < numSongs; subsong++) {
-    registerDump(e, subsong, registerWrites[subsong]);  
+    registerDump(e, (int) subsong, registerWrites[subsong]);  
   }
   if (debugRegisterDump) {
       writeRegisterDump(e, registerWrites, ret);
@@ -67,8 +84,17 @@ std::vector<DivROMExportOutput> DivExportAtari2600::go(DivEngine* e) {
 
   // write track data
   switch (exportType) {
-    case DIV_EXPORT_TIA_SIMPLE:
-      writeTrackDataSimple(e, true, registerWrites, ret);
+    case DIV_EXPORT_TIA_RAW:
+      writeTrackDataRaw(e, true, registerWrites, ret);
+      break;
+    case DIV_EXPORT_TIA_BASIC:
+      writeTrackDataBasic(e, false, true, registerWrites, ret);
+      break;
+    case DIV_EXPORT_TIA_BASICX:
+      writeTrackDataBasic(e, true, true, registerWrites, ret);
+      break;
+    case DIV_EXPORT_TIA_DELTA:
+      writeTrackDataDelta(e, registerWrites, ret);
       break;
     case DIV_EXPORT_TIA_COMPACT:
       writeTrackDataCompact(e, registerWrites, ret);
@@ -111,7 +137,7 @@ void DivExportAtari2600::writeRegisterDump(
   dump->writeText(fmt::sprintf("; Song: %s\n", e->song.name));
   dump->writeText(fmt::sprintf("; Author: %s\n", e->song.author));
 
-  for (int subsong = 0; subsong < e->song.subsong.size(); subsong++) {
+  for (size_t subsong = 0; subsong < e->song.subsong.size(); subsong++) {
     for (auto &write : registerWrites[subsong]) {
       dump->writeText(fmt::sprintf("; IDX%d %d.%d: SS%d ORD%d ROW%d SYS%d> %d = %d\n",
         write.writeIndex,
@@ -131,7 +157,7 @@ void DivExportAtari2600::writeRegisterDump(
 }
 
 // simple register dump
-void DivExportAtari2600::writeTrackDataSimple(
+void DivExportAtari2600::writeTrackDataRaw(
   DivEngine* e, 
   bool encodeDuration,
   std::vector<RegisterWrite> *registerWrites,
@@ -143,22 +169,23 @@ void DivExportAtari2600::writeTrackDataSimple(
   trackData->writeText(fmt::sprintf("; Song: %s\n", e->song.name));
   trackData->writeText(fmt::sprintf("; Author: %s\n", e->song.author));
 
-  for (int subsong = 0; subsong < e->song.subsong.size(); subsong++) {
+  for (size_t subsong = 0; subsong < e->song.subsong.size(); subsong++) {
     for (int channel = 0; channel < 2; channel++) {
       ChannelStateSequence dumpSequence;
 
       writeChannelStateSequence(
         registerWrites[subsong],
-        subsong,
+        (int) subsong,
         channel,
         0,
         channel == 0 ? channel0AddressMap : channel1AddressMap,
-        dumpSequence);
+        dumpSequence
+      );
 
       size_t waveformDataSize = 0;
       size_t totalFrames = 0;
       trackData->writeC('\n');
-      trackData->writeText(fmt::sprintf("CHANNEL_%d\n", channel));
+      trackData->writeText(fmt::sprintf("TRACK_%d_CHANNEL_%d\n", subsong, channel));
       if (encodeDuration) {
         for (auto& n: dumpSequence.intervals) {
           trackData->writeText(fmt::sprintf("    byte %d, %d, %d, %d\n",
@@ -189,7 +216,256 @@ void DivExportAtari2600::writeTrackDataSimple(
     }
   }
 
-  ret.push_back(DivROMExportOutput("Track_simple.asm", trackData));
+  ret.push_back(DivROMExportOutput("Track_data.asm", trackData));
+
+}
+
+// simple register dump with separate tables for frequency and control / volume
+void DivExportAtari2600::writeTrackDataBasic(
+  DivEngine* e,
+  bool encodeDuration,
+  bool independentChannelPlayback,
+  std::vector<RegisterWrite> *registerWrites,
+  std::vector<DivROMExportOutput> &ret
+) {
+  size_t numSongs = e->song.subsong.size();
+
+  // write track audio data
+  SafeWriter* trackData = new SafeWriter;
+  trackData->init();
+  trackData->writeText("; Furnace Tracker audio data file\n");
+  trackData->writeText("; Basic data format\n");
+  trackData->writeText(fmt::sprintf("; Song: %s\n", e->song.name));
+  trackData->writeText(fmt::sprintf("; Author: %s\n", e->song.author));
+
+  trackData->writeText(fmt::sprintf("\nAUDIO_NUM_TRACKS = %d\n", numSongs));
+
+  if (encodeDuration) {
+    trackData->writeText("\n#include \"cores/basicx_player_core.asm\"\n");
+  } else {
+    trackData->writeText("\n#include \"cores/basic_player_core.asm\"\n");
+  }
+
+  // create a lookup table (for use in player apps)
+  size_t songDataSize = 0;
+  if (independentChannelPlayback) {
+    // one track table per channel
+    for (int channel = 0; channel < 2; channel++) {
+      trackData->writeText(fmt::sprintf("AUDIO_TRACKS_%d:\n", channel));
+      for (size_t subsong = 0; subsong < numSongs; subsong++) {
+        trackData->writeText(fmt::sprintf("    byte AUDIO_TRACK_%d_%d\n", subsong, channel));
+        songDataSize += 1;
+      }
+    }
+
+  } else {
+    // one track table for both channels
+    trackData->writeText("AUDIO_TRACKS\n");
+    for (size_t i = 0; i < e->song.subsong.size(); i++) {
+      trackData->writeText(fmt::sprintf("    byte AUDIO_TRACK_%d\n", i));
+      songDataSize += 1;
+    }
+
+  }
+
+  // dump sequences
+  size_t sizeOfAllSequences = 0;
+  size_t sizeOfAllSequencesPerChannel[2] = {0, 0};
+  ChannelStateSequence dumpSequences[numSongs][2];
+  for (size_t subsong = 0; subsong < numSongs; subsong++) {
+    for (int channel = 0; channel < 2; channel++) {
+      // limit to 1 frame per note
+      dumpSequences[subsong][channel].maxIntervalDuration = encodeDuration ? 8 : 1;
+      writeChannelStateSequence(
+        registerWrites[subsong],
+        (int) subsong,
+        channel,
+        0,
+        channel == 0 ? channel0AddressMap : channel1AddressMap,
+        dumpSequences[subsong][channel]
+      );
+      size_t totalDataPointsThisSequence = dumpSequences[subsong][channel].size() + 1;
+      sizeOfAllSequences += totalDataPointsThisSequence;
+      sizeOfAllSequencesPerChannel[channel] += totalDataPointsThisSequence;
+    }
+  }
+
+  if (independentChannelPlayback) {
+    // channels do not have to be synchronized, can be played back independently
+    if (sizeOfAllSequences > 256) {
+      String msg = fmt::sprintf(
+        "cannot export data in this format: data sequence has %d > 256 data points",
+        sizeOfAllSequences
+      );
+      logE(msg.c_str());
+      throw new std::runtime_error(msg);
+    }
+  } else {
+    // data for each channel locked to same index
+    if (sizeOfAllSequencesPerChannel[0] != sizeOfAllSequencesPerChannel[1]) {
+      String msg = fmt::sprintf(
+        "cannot export data in this format: channel data sequence lengths [%d, %d] do not match",
+        sizeOfAllSequencesPerChannel[0],
+        sizeOfAllSequencesPerChannel[1]
+      );
+      logE(msg.c_str());
+      throw new std::runtime_error(msg);
+    }
+    if (sizeOfAllSequencesPerChannel[0] > 256) {
+      String msg = fmt::sprintf(
+        "cannot export data in this format: data sequence has %d > 256 data points",
+        sizeOfAllSequencesPerChannel[0]
+      );
+      logE(msg.c_str());
+      throw new std::runtime_error(msg);
+    }
+  }
+
+  // Frequencies table
+  size_t freqTableSize = 0;
+  trackData->writeText("\n    ; FREQUENCY TABLE\n");
+  if (independentChannelPlayback) {
+    trackData->writeText("AUDIO_F:\n");
+  }
+  for (int channel = 0; channel < 2; channel++) {
+    if (!independentChannelPlayback) {
+      trackData->writeText(fmt::sprintf("AUDIO_F_%d:\n", channel));
+    }
+    for (size_t subsong = 0; subsong < numSongs; subsong++) {
+      trackData->writeText(fmt::sprintf("    ; TRACK %d, CHANNEL %d\n", subsong, channel));
+      if (independentChannelPlayback) {
+        trackData->writeText(fmt::sprintf("AUDIO_TRACK_%d_%d = . - AUDIO_F + 1", subsong, channel));
+      } else if (channel == 0) {
+        trackData->writeText(fmt::sprintf("AUDIO_TRACK_%d = . - AUDIO_F%d + 1", subsong, channel));
+      }
+      size_t i = 0;
+      for (auto& n: dumpSequences[subsong][channel].intervals) {
+        if (i % 16 == 0) {
+          trackData->writeText("\n    byte ");
+        } else {
+          trackData->writeText(",");
+        }
+        i++;
+        unsigned char fx = n.state.registers[1];
+        unsigned char dx = n.duration > 0 ? n.duration - 1 : 0;
+        unsigned char rx = dx << 5 | fx;
+        trackData->writeText(fmt::sprintf("%d", rx));
+        freqTableSize += 1;
+      }
+      trackData->writeText(fmt::sprintf("\n    byte 0;\n"));
+      freqTableSize += 1;
+    }
+  }
+
+  // Control-volume table
+  size_t cvTableSize = 0;
+  trackData->writeText("\n    ; CONTROL/VOLUME TABLE\n");
+  if (independentChannelPlayback) {
+    trackData->writeText("AUDIO_CV:\n");
+  }
+  for (int channel = 0; channel < 2; channel++) {
+    if (!independentChannelPlayback) {
+      trackData->writeText(fmt::sprintf("AUDIO_CV_%d:\n", channel));
+    }
+    for (size_t subsong = 0; subsong < numSongs; subsong++) {
+      trackData->writeText(fmt::sprintf("    ; TRACK %d, CHANNEL %d", subsong, channel));
+      size_t i = 0;
+      for (auto& n: dumpSequences[subsong][channel].intervals) {
+        if (i % 16 == 0) {
+          trackData->writeText("\n    byte ");
+        } else {
+          trackData->writeText(",");
+        }
+        i++;
+        unsigned char cx = n.state.registers[0];
+        unsigned char vx = n.state.registers[2];
+        // if volume is zero, make cx nonzero
+        unsigned char rx = (vx == 0 ? 0xf0 : cx << 4) | vx; 
+        trackData->writeText(fmt::sprintf("%d", rx));
+        cvTableSize += 1;
+      }
+      trackData->writeText(fmt::sprintf("\n    byte 0;\n"));
+      cvTableSize += 1;
+    }
+  }
+
+  trackData->writeC('\n');
+  trackData->writeText(fmt::sprintf("; Num Tracks %d\n", numSongs));
+  trackData->writeText(fmt::sprintf("; All Tracks Sequence Length %d\n", sizeOfAllSequences));
+  trackData->writeText(fmt::sprintf("; Track Table Size %d\n", songDataSize));
+  trackData->writeText(fmt::sprintf("; Freq Table Size %d\n", freqTableSize));
+  trackData->writeText(fmt::sprintf("; CV Table Size %d\n", cvTableSize));
+  size_t totalDataSize = songDataSize + freqTableSize + cvTableSize;
+  trackData->writeText(fmt::sprintf("; Total Data Size %d\n", totalDataSize));
+
+  ret.push_back(DivROMExportOutput("Track_data.asm", trackData));
+
+}
+
+// Delta encoding
+void DivExportAtari2600::writeTrackDataDelta(
+  DivEngine* e,
+  std::vector<RegisterWrite> *registerWrites,
+  std::vector<DivROMExportOutput> &ret
+) {
+  size_t numSongs = e->song.subsong.size();
+
+  // write track audio data
+  SafeWriter* trackData = new SafeWriter;
+  trackData->init();
+  trackData->writeText("; Furnace Tracker audio data file\n");
+  trackData->writeText("; Delta coded format\n");
+  trackData->writeText(fmt::sprintf("; Song: %s\n", e->song.name));
+  trackData->writeText(fmt::sprintf("; Author: %s\n", e->song.author));
+
+  trackData->writeText(fmt::sprintf("\nAUDIO_NUM_TRACKS = %d\n", numSongs));
+  
+  trackData->writeText("\n#include \"cores/delta_player_core.asm\"\n");
+
+  // create a lookup table for use in player apps
+  size_t songDataSize = 0;
+  // one track table per channel
+  for (int channel = 0; channel < 2; channel++) {
+    trackData->writeText(fmt::sprintf("AUDIO_TRACKS_%d:\n", channel));
+    for (size_t subsong = 0; subsong < numSongs; subsong++) {
+      trackData->writeText(fmt::sprintf("    byte AUDIO_TRACK_%d_%d\n", subsong, channel));
+      songDataSize += 1;
+    }
+  }
+
+  // dump sequences
+  size_t trackDataSize = 0;
+  trackData->writeText("AUDIO_DATA:\n");
+  for (size_t subsong = 0; subsong < numSongs; subsong++) {
+    for (int channel = 0; channel < 2; channel++) {
+      ChannelStateSequence dumpSequence;
+      writeChannelStateSequence(
+        registerWrites[subsong],
+        (int) subsong,
+        channel,
+        0,
+        channel == 0 ? channel0AddressMap : channel1AddressMap,
+        dumpSequence
+      );
+      trackData->writeText(fmt::sprintf("AUDIO_TRACK_%d_%d = . - AUDIO_DATA + 1\n", subsong, channel));
+      ChannelState last(dumpSequence.initialState);
+      for (auto& n: dumpSequence.intervals) {
+        trackDataSize += writeNoteCompact(trackData, n.state, n.duration, last);
+        last = n.state;
+      }
+      trackData->writeText("    byte 0\n");
+      trackDataSize++;
+    }
+  }
+
+  trackData->writeC('\n');
+  trackData->writeText(fmt::sprintf("; Num Tracks %d\n", numSongs));
+  trackData->writeText(fmt::sprintf("; Track Table Size %d\n", songDataSize));
+  trackData->writeText(fmt::sprintf("; Data Table Size %d\n", trackDataSize));
+  size_t totalDataSize = songDataSize + trackDataSize;
+  trackData->writeText(fmt::sprintf("; Total Data Size %d\n", totalDataSize));
+
+  ret.push_back(DivROMExportOutput("Track_data.asm", trackData));
 
 }
 
@@ -204,11 +480,11 @@ void DivExportAtari2600::writeTrackDataCompact(
   logD("performing sequence capture");
   std::vector<String> channelSequences[2];
   std::map<String, ChannelStateSequence> registerDumps;
-  for (int subsong = 0; subsong < e->song.subsong.size(); subsong++) {
+  for (size_t subsong = 0; subsong < e->song.subsong.size(); subsong++) {
     for (int channel = 0; channel < 2; channel++) {
       writeChannelStateSequenceByRow(
         registerWrites[subsong],
-        subsong,
+        (int) subsong,
         channel,
         0,
         channel == 0 ? channel0AddressMap : channel1AddressMap,
@@ -246,6 +522,8 @@ void DivExportAtari2600::writeTrackDataCompact(
   trackData->init();
   trackData->writeText(fmt::sprintf("; Song: %s\n", e->song.name));
   trackData->writeText(fmt::sprintf("; Author: %s\n", e->song.author));
+
+  trackData->writeText("\n#include \"cores/compact_player_core.asm\"\n");
 
   // emit song table
   logD("writing song table");
@@ -372,7 +650,7 @@ void DivExportAtari2600::writeTrackDataCompact(
     auto& dump = registerDumps[x.second];
     ChannelState last(dump.initialState);
     for (auto& n: dump.intervals) {
-      waveformDataSize += writeNoteF0(trackData, n.state, n.duration, last);
+      waveformDataSize += writeNoteCompact(trackData, n.state, n.duration, last);
       last = n.state;
     }
     trackData->writeText("    byte 0\n");
@@ -401,7 +679,8 @@ void DivExportAtari2600::writeTrackDataCompact(
  * 
  *   fffff010 wwwwvvvv           frequency + waveform + volume, duration 1
  *   fffff110 wwwwvvvv           " " ", duration 2
- *   fffff100 dddddddd wwwwvvvv  " " ", duration d
+ *   ddddd100                    sustain d frames
+ *   ddddd000                    pause d frames
  *   xxxx0001                    volume = x >> 4, duration 1 
  *   xxxx1001                    volume = x >> 4, duration 2
  *   xxxx0101                    wave = x >> 4, duration 1
@@ -410,14 +689,14 @@ void DivExportAtari2600::writeTrackDataCompact(
  *   xxxxx111                    frequency = x >> 3, duration 2
  *   00000000                    stop
  */
-size_t DivExportAtari2600::writeNoteF0(SafeWriter* w, const ChannelState& next, const char duration, const ChannelState& last) {
+size_t DivExportAtari2600::writeNoteCompact(SafeWriter* w, const ChannelState& next, const char duration, const ChannelState& last) {
   size_t bytesWritten = 0;
-  unsigned char dmod = 0; // if duration is small, store in top bits of frequency
 
+  // when duration is zero... some kind of rounding issue has happened... we force to 1...
   if (duration == 0) {
       logD("0 duration note");
   }
-  const char framecount = duration > 0 ? duration - 1 : 0; // BUGBUG: when duration is zero... we force to 1...
+  char framecount = duration > 0 ? duration : 1; 
 
   unsigned char audfx, audcx, audvx;
   int cc, fc, vc;
@@ -427,12 +706,29 @@ size_t DivExportAtari2600::writeNoteF0(SafeWriter* w, const ChannelState& next, 
   fc = audfx != last.registers[1];
   audvx = next.registers[2];
   vc = audvx != last.registers[2];
+  int delta = (cc + fc + vc);
   
   w->writeText(fmt::sprintf("    ;F%d C%d V%d D%d\n", audfx, audcx, audvx, duration));
 
-  if ( ((cc + fc + vc) == 1) && framecount < 2) {
+  if (audvx == 0) {
+    // volume is zero, pause
+    unsigned char dmod = framecount > 31 ? 31 : framecount;
+    framecount -= dmod;
+    unsigned char rx = dmod << 3;
+    w->writeText(fmt::sprintf("    byte %d; PAUSE %d\n", rx, dmod));
+    bytesWritten += 1;
+    
+  } else if ( delta == 1 ) {
     // write a delta row - only change one register
-    dmod = framecount; 
+    unsigned char dmod;
+    if (framecount > 2) {
+      dmod = 1;
+      framecount -= 2;
+    } else {
+      dmod = framecount - 1;
+      framecount = 0;
+    }
+
     unsigned char rx;
     if (fc > 0) {
       // frequency
@@ -447,55 +743,68 @@ size_t DivExportAtari2600::writeNoteF0(SafeWriter* w, const ChannelState& next, 
     w->writeText(fmt::sprintf("    byte %d\n", rx));
     bytesWritten += 1;
 
-  } else {
+  } else if ( delta > 1 ) {
     // write all registers
-    if (framecount < 2) {
-      // short duration
-      dmod = framecount << 1 | 0x01; // BUGBUG: complicated format
+    unsigned char dmod;
+    if (framecount > 2) {
+      dmod = 1;
+      framecount -= 2;
     } else {
-      dmod = 0x02;
+      dmod = framecount - 1;
+      framecount = 0;
     }
+
     // frequency
-    unsigned char x = audfx << 3 | dmod << 1;
+    unsigned char x = audfx << 3 | dmod << 2 | 0x02;
     w->writeText(fmt::sprintf("    byte %d", x));
-    if (dmod == 0x02) {
-      w->writeText(fmt::sprintf(",%d", framecount));
-      bytesWritten += 1;
-    }
+    bytesWritten += 1;
+
     // waveform and volume
     unsigned char y = (audcx << 4) + audvx;
     w->writeText(fmt::sprintf(",%d\n", y));
-    bytesWritten += 2;
+    bytesWritten += 1;
 
+  }
+
+  // when delta is zero / we have leftover frames, sustain
+  while (framecount > 0) {
+    unsigned char dmod;
+    if (framecount > 32) {
+      dmod = 31;
+      framecount -= 32;
+    } else {
+      dmod = framecount - 1;
+      framecount = 0;
+    }
+    unsigned char sx =  dmod << 3 | 0x04;
+    w->writeText(fmt::sprintf("    byte %d; SUSTAIN %d\n", sx, dmod + 1));
+    bytesWritten += 1;
   }
 
   return bytesWritten;
 
 }
 
-/** 
+/**
+ * Write note data. Format 1:
  * 
- *  Write note data. Format 1:
- * 
- * 00000000 stop/return
- * 0000dddd pause,   15 >= d >= 1
- * 0001dddd sustain, 15 >= d >= 1
- * 0ddfffff wwwwvvvv, 3 >= d >= 1
- * 100dffff f +- 8  , 2 >= d >= 1
- * 101dwwww w       , 2 >= d >= 1
- * 110dvvvv v       , 2 >= d >= 1
- * 111xxxxx xxxxxxxx, dictionary lookup
+ * 1111 hhhh llll llll
+ * 1110 hhhh llll llll
+ * 110 fffff cccc vvvv
+ * 101 fffff
+ * 1001 vvvv
+ * 1000 cccc
+ * 01xx xxxx lookup
+ * 00dd dddd sustain
+ * 0000 0000
  * 
  */
-size_t DivExportAtari2600::writeNoteF1(SafeWriter* w, const ChannelState& next, const char duration, const ChannelState& last) {
+size_t DivExportAtari2600::writeNoteDelta(SafeWriter* w, const ChannelState& next, const char duration, const ChannelState& last) {
   size_t bytesWritten = 0;
 
-    if (duration == 0) {
+  if (duration == 0) {
       logD("0 duration note");
   }
-
-  unsigned char dmod = 0; // if duration is small, store in top bits of frequency
-  unsigned char framecount = duration > 0 ? duration : 1; 
 
   unsigned char audfx, audcx, audvx;
   int cc, fc, vc;
@@ -510,46 +819,40 @@ size_t DivExportAtari2600::writeNoteF1(SafeWriter* w, const ChannelState& next, 
   w->writeText(fmt::sprintf("    ;%d %d %d\nc", last.registers[0], last.registers[1], last.registers[2]));
   w->writeText(fmt::sprintf("    ;F%d C%d V%d D%d %d %d %d %d\n", audfx, audcx, audvx, duration, cc, fc, vc, fmod));
 
-  if ( audvx == 0 ) {
-    // pause 
-    dmod = (framecount > 15) ? 15 : framecount;
-    w->writeText(fmt::sprintf("    byte %d; PAUSE\n", dmod));
-    bytesWritten += 1;
-
-  } else if ( ((cc + fc + vc) == 1) ) { // BUGBUG: && abs(fmod) <  8) {
+  // write register change
+  if ( ((cc + fc + vc) == 1) ) { 
     // write a delta row - only change one register
-    dmod = (framecount > 2) ? framecount - 1 : 1;
     unsigned char rx;
     if (fc > 0) {
       // frequency
-      // BUGBUG: incorrect
-      rx = dmod << 4 | fmod | 0x80; // 100dffff 
+      rx = 0xa0 | audfx; // 101fffff 
     } else if (cc > 0) {
-      // waveform
-      rx = dmod << 4 | audcx | 0x90; // 101dwwww
+      // control
+      rx = 0x80 | audcx; // 1000cccc
     } else {
       // volume 
-      rx = dmod << 4 | audvx | 0xc0; //110dccc
+      rx = 0x90 | audvx ; // 1001vvvv
     }
     w->writeText(fmt::sprintf("    byte %d\n", rx));
     bytesWritten += 1;
 
   } else {
     // write all registers
-    dmod = framecount > 3 ? 3 : framecount;
     // frequency
-    unsigned char x = dmod << 5 | audfx << 3;
+    unsigned char x = 0xc0 | audfx;
     w->writeText(fmt::sprintf("    byte %d", x));
     bytesWritten += 1;
     // waveform and volume
     unsigned char y = (audcx << 4) + audvx;
     w->writeText(fmt::sprintf(",%d\n", y));
     bytesWritten += 1;
+
   }
 
-  framecount = framecount - dmod;
+  unsigned char framecount = duration > 0 ? duration : 1; 
+
   while (framecount > 0) {
-    dmod = (framecount > 15) ? 15 : framecount;
+    unsigned char dmod = (framecount > 15) ? 15 : framecount;
     framecount = framecount - dmod;
     unsigned char sx = 0x10 | dmod;
     w->writeText(fmt::sprintf("    byte %d; SUSTAIN\n", sx));
@@ -557,6 +860,7 @@ size_t DivExportAtari2600::writeNoteF1(SafeWriter* w, const ChannelState& next, 
   }
 
   return bytesWritten;
+
 }
 
 void DivExportAtari2600::writeWaveformHeader(SafeWriter* w, const char * key) {

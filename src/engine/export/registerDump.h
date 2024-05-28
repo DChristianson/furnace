@@ -159,11 +159,12 @@ struct ChannelStateInterval {
 struct ChannelStateSequence {
 
   ChannelState initialState;
+  int maxIntervalDuration;
   std::vector<ChannelStateInterval> intervals;
 
-
-  ChannelStateSequence() : initialState(255) {}
-  ChannelStateSequence(const ChannelState &initialState) : initialState(initialState) {}
+  ChannelStateSequence() : initialState(255), maxIntervalDuration(255) {}
+  ChannelStateSequence(const ChannelState &initialState, int maxIntervalDuration) 
+    : initialState(initialState), maxIntervalDuration(maxIntervalDuration) {}
 
   void updateState(const ChannelState &state) {
     if (intervals.size() > 0 && intervals.back().state.equals(state)) {
@@ -177,9 +178,17 @@ struct ChannelStateSequence {
     if (intervals.size() == 0) {
       intervals.emplace_back(ChannelStateInterval(ChannelState(0), 0));
     }
+    ChannelStateInterval &lastInterval = intervals.back();
     int total = ticks + remainder;
     int cycles = total / freq;
-    intervals.back().duration += cycles;
+    int nextDuration = lastInterval.duration + cycles;
+    if (nextDuration > maxIntervalDuration) {
+      lastInterval.duration = maxIntervalDuration;
+      nextDuration = nextDuration - maxIntervalDuration;
+      intervals.emplace_back(ChannelStateInterval(lastInterval.state, nextDuration));
+    } else {
+      lastInterval.duration = nextDuration;
+    }    
     return total - (cycles * freq);
   }
 

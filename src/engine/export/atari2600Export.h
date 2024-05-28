@@ -24,49 +24,87 @@
 #include "registerDump.h"
 
 enum DivExportTIAType {
-  DIV_EXPORT_TIA_SIMPLE,
-  DIV_EXPORT_TIA_COMPACT
+  DIV_EXPORT_TIA_RAW,     // raw data export - no driver support 
+  DIV_EXPORT_TIA_BASIC,   // simple 2 channel sound driver
+  DIV_EXPORT_TIA_BASICX,  // simple 2 channel sound driver with sustain (duration)
+  DIV_EXPORT_TIA_DELTA,   // simple 2 channel delta-encoded sound driver
+  DIV_EXPORT_TIA_COMPACT  // advanced compressed music driver 
 };
 
 class DivExportAtari2600 : public DivROMExport {
 
-  // BUGBUG: allow setting options
-  DivExportTIAType exportType = DIV_EXPORT_TIA_COMPACT; 
-  bool debugRegisterDump = true;
+  DivExportTIAType exportType; 
+  bool debugRegisterDump;
 
   size_t writeTextGraphics(SafeWriter* w, const char* value);
 
   void writeWaveformHeader(SafeWriter* w, const char* key);
 
-  // raw data dump
+  // dump all register writes
   void writeRegisterDump(
     DivEngine* e, 
     std::vector<RegisterWrite> *registerWrites,
     std::vector<DivROMExportOutput> &ret
   );
 
-  // uncompressed encoding 
-  // 1 byte per register
-  // optionally use 1 byte to encode duration
-  void writeTrackDataSimple(
+  //
+  // basic uncompressed (raw) encoding
+  // 3-4 bytes per channel
+  //
+  //  AUDCx, AUDFx, AUDVx [, duration]
+  //  AUDCx, AUDFx, AUDVx [, duration]
+  //  AUDCx, AUDFx, AUDVx [, duration]
+  //  ...
+  //
+  void writeTrackDataRaw(
     DivEngine* e, 
     bool encodeDuration,
     std::vector<RegisterWrite> *registerWrites,
     std::vector<DivROMExportOutput> &ret
   );
 
-  // compacted encoding 
+  // 
+  // simple encoding suitable for sound effects and
+  // short game music sequences
+  //
+  // 2 bytes per channel
+  // 
+  void writeTrackDataBasic(
+    DivEngine* e, 
+    bool encodeDuration,
+    bool independentChannelPlayback,
+    std::vector<RegisterWrite> *registerWrites,
+    std::vector<DivROMExportOutput> &ret
+  );
+
+  // 
+  // delta encoding suitable for sound effects and
+  // short game music sequences
+  //
+  // 2 bytes per channel
+  // 
+  void writeTrackDataDelta(
+    DivEngine* e, 
+    std::vector<RegisterWrite> *registerWrites,
+    std::vector<DivROMExportOutput> &ret
+  );
+
+  //
+  // compact encoding 
+  // compressed sequences
+  //
   void writeTrackDataCompact(
     DivEngine* e, 
     std::vector<RegisterWrite> *registerWrites,
     std::vector<DivROMExportOutput> &ret
   );
 
-  size_t writeNoteF0(SafeWriter* w, const ChannelState& next, const char duration, const ChannelState& last);
-  size_t writeNoteF1(SafeWriter* w, const ChannelState& next, const char duration, const ChannelState& last);
+  size_t writeNoteDelta(SafeWriter* w, const ChannelState& next, const char duration, const ChannelState& last);
+  size_t writeNoteCompact(SafeWriter* w, const ChannelState& next, const char duration, const ChannelState& last);
 
 public:
 
+  DivExportAtari2600(DivEngine * e);
   ~DivExportAtari2600() {}
 
   std::vector<DivROMExportOutput> go(DivEngine* e) override;
