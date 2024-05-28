@@ -9,6 +9,8 @@ PAL60 = 1
 SYSTEM = NTSC
     ENDIF
 
+AUDIO_BUFFER_IN_RAM = 1
+
 ; ----------------------------------
 ; constants
 
@@ -28,7 +30,6 @@ BLACK = 0
 SCANLINES = 262
 #endif
 
-NUM_AUDIO_CHANNELS = 2
 COUNTER_BLOCK_HEIGHT = 6
 COUNTER_HEIGHT = COUNTER_BLOCK_HEIGHT + 3
 GRADIENT_FIELD_HEIGHT = 193 - (COUNTER_HEIGHT * 3)
@@ -45,22 +46,13 @@ MAX_SPEED = 4
 
 frame               ds 1  ; frame counter
 
-audio_song          ds 1  ; what song are we on
-audio_song_ptr      ds 2  ; address of song
-audio_song_order    ds 1  ; what order are we at in the song
-audio_row_idx       ds 1  ; where are we in the current order
-audio_pattern_idx   ds 2  ; which pattern is playing on each channel
-audio_pattern_ptr   ds 2
-audio_waveform_idx  ds 2  ; where are we in waveform on each channel
-audio_waveform_ptr  ds 2
-audio_timer         ds 2  ; time left on next action on each channel
+  AUDIO_VARS
 
 audio_registers
 audio_cx            ds 2  ; 
 audio_fx            ds 2  ; 
 audio_vx            ds 2
 audio_register_end
-
 
 audio_stack_ptr     ds 2
 audio_buffer        ds (6 * 8)
@@ -89,8 +81,7 @@ CleanStart
             CLEAN_START
 
             ; load track
-            ldy #0
-            jsr sub_start_song
+            jsr audio_play_track
             ; playback speed
             lda #1
             sta speed
@@ -167,10 +158,10 @@ _skip_trigger_pause
             bcs _right
             jmp _end_input
 _down
-            jsr sub_inc_song
+            jsr audio_inc_track
             jmp _end_input            
 _up
-            jsr sub_dec_song
+            jsr audio_dec_track
             jmp _end_input  
 _left
             lda #$ff
@@ -210,7 +201,7 @@ audio_tracker_on
 _audio_buffer_loop
             lsr tmp_update_ctl
             bcc _audio_skip_update
-            jsr sub_play_song
+            jsr audio_update
 _audio_skip_update
             ldy #5
 _audio_update_loop
@@ -235,8 +226,7 @@ _vis_gradient_setup_loop
             dex
             bpl _vis_gradient_setup_loop
 
-            ldy audio_row_idx
-            lda (audio_pattern_ptr),y
+            AUDIO_LDA_VIS_PAT
             and #$0f
             tax
             lda #$0f
@@ -435,8 +425,6 @@ sub_freq_slice
             sta PF1                 ;3  12
             sta PF2                 ;3  19
             rts
-
-  #include "Player_core.asm"
 
 ;-----------------------------------------------------------------------------------
 ; Audio

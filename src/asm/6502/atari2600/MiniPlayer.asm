@@ -32,7 +32,6 @@ BLACK = 0
 SCANLINES = 262
 #endif
 
-NUM_AUDIO_CHANNELS = 2
 GRADIENT_FIELD_HEIGHT = 193
 OVERSCAN_HEIGHT = 31
 
@@ -43,21 +42,7 @@ OVERSCAN_HEIGHT = 31
 
     ORG $80
 
-audio_song          ds 1  ; what song are we on
-audio_song_ptr      ds 2  ; address of song
-audio_song_order    ds 1  ; what order are we at in the song
-audio_row_idx       ds 1  ; where are we in the current order
-audio_pattern_idx   ds 2  ; which pattern is playing on each channel
-audio_pattern_ptr   ds 2
-audio_waveform_idx  ds 2  ; where are we in waveform on each channel
-audio_waveform_ptr  ds 2
-audio_timer         ds 2  ; time left on next action on each channel
-
-audio_registers
-audio_cx = AUDC0
-audio_fx = AUDF0 
-audio_vx = AUDV0
-audio_register_end
+    AUDIO_VARS
 
 ; ----------------------------------
 ; code
@@ -71,7 +56,7 @@ CleanStart
             CLEAN_START
 
             ; load track
-            jsr sub_start_song
+            jsr audio_play_track
 
 newFrame
 
@@ -108,7 +93,7 @@ _end_switches
 ;---------------------
 ; audio tracker
 
-            jsr sub_play_song
+            jsr audio_update
 
 ;---------------------
 ; end vblank

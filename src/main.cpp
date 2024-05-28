@@ -582,13 +582,6 @@ TAParamResult pOutput(String val) {
   return TA_PARAM_SUCCESS;
 }
 
-TAParamResult pROMOut(String val) {
-  romOutName=val;
-  e.setAudio(DIV_AUDIO_DUMMY);
-  return TA_PARAM_SUCCESS;
-}
-
-
 TAParamResult pVGMOut(String val) {
   vgmOutName=val;
   e.setAudio(DIV_AUDIO_DUMMY);
@@ -1056,6 +1049,7 @@ int main(int argc, char** argv) {
   }
 
   if (outputMode) {
+
     if (cmdOutName!="") {
       SafeWriter* w=e.saveCommand(NULL);
       if (w!=NULL) {
