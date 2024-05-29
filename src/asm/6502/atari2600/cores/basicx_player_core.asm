@@ -34,7 +34,6 @@ audio_dec_track
             ldy #(AUDIO_NUM_TRACKS - 1)
 _audio_track_save
             sty audio_track
-            rts
 
 audio_play_track
             ldy audio_track
