@@ -35,7 +35,6 @@ audio_dec_track
             ldy #(NUM_SONGS - 1)
 _song_save
             sty audio_song
-            rts
 
 audio_play_track
             ldy audio_song
@@ -82,51 +81,48 @@ _audio_next_note
             ldy audio_waveform_idx,x
             lda (audio_waveform_ptr),y
             beq _audio_advance_tracker ; check for zero 
-            lsr                        ; pull first bit
-            bcc _set_registers         ; if clear go to load registers
-            lsr                        ; check second bit
-            bcc _set_cx_vx             ; if clear we are loading aud(c|v)x
-            lsr                        ; pull duration bit for later set
+            lsr                        ; .......|C pull first bit
+            bcc _set_all_registers     ; .......|? if clear go to load all registers
+            lsr                        ; 0......|C1 pull second bit
+            bcc _set_cx_vx             ; 0......|?1 if clear we are loading aud(c|v)x
+            lsr                        ; 00fffff|C11 pull duration bit for later set
             sta audio_fx,x             ; store frequency
-            jmp _set_timer_delta       ; jump to duration 
-_set_cx_vx  lsr
-            bcc _set_vx ; BUGBUG broken
-            lsr
-            sta audio_cx,x
-            jmp _set_timer_delta       ; jump to duration
+            bpl _set_timer_delta       ; jump to duration (note: should always be positive)
+_set_cx_vx  lsr                        ; 00.....|C01
+            bcc _set_vx                ; 00.....|?01  
+            lsr                        ; 000cccc|C101
+            sta audio_cx,x             ; store control
+            bpl _set_timer_delta       ; jump to duration (note: should always be positive)
 _set_vx
-            lsr
-            sta audio_vx,x
+            lsr                        ; 000vvvv|C001
+            sta audio_vx,x             ; store volume
 _set_timer_delta
-            lda #0
-            adc #0                     ; will be 0 or 1 based on carry bit
-            sta audio_timer,x
-            jmp _audio_advance_waveform
-_set_registers
+            rol audio_timer,x          ; set new timer to 0 or 1 depending on carry bit
+            bpl _audio_advance_note    ; done (note: should always be positive)
+_set_all_registers
             ; processing all registers
-            pha                        ; save timer
-            lsr
-            lsr
-            sta audio_fx,x
-            iny
-            pla                      
-            and #$03
-            lsr
-            bcs _set_timer_registers
-            lda (audio_waveform_ptr),y
-            iny
-_set_timer_registers
+            lsr                        ; 00......|C0
+            bcc _set_suspause          ; 00......|?0 if clear we are suspausing
+            lsr                        ; 0000fffff|C10 pull duration bit
+            sta audio_fx,x             ; store frequency
+            iny                        ; advance 1 byte
+            lda (audio_waveform_ptr),y ; ccccvvvv|
+            sta audio_vx,x             ; store volume
+            lsr                        ; 0ccccvvv|
+            lsr                        ; 00ccccvv|
+            lsr                        ; 000ccccv|
+            lsr                        ; 0000cccc|
+            sta audio_cx,x             ; store control
+            bpl _set_timer_delta       ; jump to duration (note: should always be positive)
+_set_suspause
+            lsr                        ; 000ddddd|?00 if set we are sustaining
+            sta audio_timer,x          ;
+            bcs _audio_advance_note
+            adc #-1
             sta audio_timer,x
-            lda (audio_waveform_ptr),y
-            lsr
-            lsr
-            lsr
-            lsr
-            sta audio_cx,x
-            lda (audio_waveform_ptr),y
-            and #$0f
-            sta audio_vx,x
-_audio_advance_waveform
+            lda #0
+            sta audio_vx,x             ; clear volume
+_audio_advance_note
             iny
             sty audio_waveform_idx,x
             jmp _audio_next_channel
