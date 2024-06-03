@@ -733,6 +733,7 @@ src/engine/zsmOps.cpp
 src/engine/zsm.cpp
 src/engine/export/atari2600Export.cpp
 src/engine/export/registerDump.cpp
+src/engine/export/suffixTree.cpp
 src/engine/platform/abstract.cpp
 src/engine/platform/genesis.cpp
 src/engine/platform/genesisext.cpp

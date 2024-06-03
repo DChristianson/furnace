@@ -18,6 +18,7 @@
  */
 
 #include "atari2600Export.h"
+#include "suffixTree.h"
 
 #include <fmt/printf.h>
 #include <queue>
@@ -65,6 +66,8 @@ DivExportAtari2600::DivExportAtari2600(DivEngine *e) {
     exportType = DIV_EXPORT_TIA_DELTA;
   } else if (exportTypeString == "COMPACT") {
     exportType = DIV_EXPORT_TIA_COMPACT;
+  } else if (exportTypeString == "CRUSHED") {
+    exportType = DIV_EXPORT_TIA_CRUSHED;
   }
   debugRegisterDump = e->getConfBool("romout.debugOutput", false);
 }
@@ -98,6 +101,9 @@ std::vector<DivROMExportOutput> DivExportAtari2600::go(DivEngine* e) {
       break;
     case DIV_EXPORT_TIA_COMPACT:
       writeTrackDataCompact(e, registerWrites, ret);
+      break;
+    case DIV_EXPORT_TIA_CRUSHED:
+      writeTrackDataCrushed(e, registerWrites, ret);
       break;
   }
 
@@ -449,8 +455,18 @@ void DivExportAtari2600::writeTrackDataDelta(
       );
       trackData->writeText(fmt::sprintf("AUDIO_TRACK_%d_%d = . - AUDIO_DATA + 1\n", subsong, channel));
       ChannelState last(dumpSequence.initialState);
+      std::vector<unsigned char> codeSeq;
       for (auto& n: dumpSequence.intervals) {
-        trackDataSize += writeNoteCompact(trackData, n.state, n.duration, last);
+        codeSeq.clear();
+        trackDataSize += encodeChannelState(n.state, n.duration, last, codeSeq);
+        trackData->writeText("    byte ");
+        for (size_t i = 0; i < codeSeq.size(); i++) {
+          if (i > 0) {
+            trackData->writeC(',');
+          }
+          trackData->writeText(fmt::sprintf("%d", codeSeq[i]));
+        }
+        trackData->writeC('\n');
         last = n.state;
       }
       trackData->writeText("    byte 0\n");
@@ -649,8 +665,18 @@ void DivExportAtari2600::writeTrackDataCompact(
     trackData->writeText(fmt::sprintf("; Hash %d, Freq %d\n", x.first, freq));
     auto& dump = registerDumps[x.second];
     ChannelState last(dump.initialState);
+    std::vector<unsigned char> codeSeq;
     for (auto& n: dump.intervals) {
-      waveformDataSize += writeNoteCompact(trackData, n.state, n.duration, last);
+      codeSeq.clear();
+      waveformDataSize += encodeChannelState(n.state, n.duration, last, codeSeq);
+      trackData->writeText("    byte ");
+      for (size_t i = 0; i < codeSeq.size(); i++) {
+        if (i > 0) {
+          trackData->writeC(',');
+        }
+        trackData->writeText(fmt::sprintf("%d", codeSeq[i]));
+      }
+      trackData->writeC('\n');
       last = n.state;
     }
     trackData->writeText("    byte 0\n");
@@ -674,22 +700,289 @@ void DivExportAtari2600::writeTrackDataCompact(
 
 }
 
+// BUGBUG: make macro/inline
+AlphaCode CODE_LITERAL(unsigned char x) {
+  return (AlphaCode)x;
+}
+
+// BUGBUG: make macro/inline
+AlphaCode CODE_JUMP(size_t index) {
+  return (AlphaCode)(0xff0000 | index);
+}
+
+size_t CALC_ENTROPY(const std::map<AlphaCode, size_t> &frequencyMap) {
+  double entropy = 0;
+  size_t totalCount = 0;
+  for (auto &x : frequencyMap) {
+    totalCount += x.second;
+  }
+  const double symbolCount = totalCount;
+   for (auto &x : frequencyMap) {
+    if (0 == x.first) {
+      continue;
+    }
+    const double p = ((double) x.second) / symbolCount;
+    const double logp = log2(p);
+    entropy = entropy - (p * logp);
+  }
+ 
+  const double expectedBits = entropy * symbolCount;
+  const double expectedBytes = expectedBits / 8;
+  logD("entropy: %lf (%lf bits / %lf bytes)", entropy, expectedBits, expectedBytes);
+  return ceil(expectedBits);
+}
+
+// compacted encoding
+void DivExportAtari2600::writeTrackDataCrushed(
+  DivEngine* e, 
+  std::vector<RegisterWrite> *registerWrites,
+  std::vector<DivROMExportOutput> &ret
+) {
+  size_t numSongs = e->song.subsong.size();
+
+  // write track audio data
+  SafeWriter* trackData = new SafeWriter;
+  trackData->init();
+  trackData->writeText("; Furnace Tracker audio data file\n");
+  trackData->writeText("; Basic data format\n");
+  trackData->writeText(fmt::sprintf("; Song: %s\n", e->song.name));
+  trackData->writeText(fmt::sprintf("; Author: %s\n", e->song.author));
+
+  trackData->writeText(fmt::sprintf("\nAUDIO_NUM_TRACKS = %d\n", numSongs));
+
+  trackData->writeText("\n#include \"cores/crushed_player_core.asm\"\n");
+
+  // encode command streams
+  size_t totalStates = 0;
+  size_t totalBytes = 0;
+  std::map<AlphaCode, size_t> frequencyMap;
+  std::map<AlphaCode, std::map<AlphaCode, size_t>> branchMap;
+  std::vector<AlphaCode> codeSequences[e->song.subsong.size()][2];
+  for (size_t subsong = 0; subsong < numSongs; subsong++) {
+    for (int channel = 0; channel < 2; channel++) {
+      // get channel states
+      ChannelStateSequence dumpSequence(ChannelState(0), 16);
+      writeChannelStateSequence(
+        registerWrites[subsong],
+        (int) subsong,
+        channel,
+        0,
+        channel == 0 ? channel0AddressMap : channel1AddressMap,
+        dumpSequence
+      );
+
+      // convert to code
+      ChannelState last(dumpSequence.initialState);
+      std::vector<unsigned char> codeSeq;
+      AlphaCode lastCode = 0;
+      for (auto& n: dumpSequence.intervals) {
+        codeSeq.clear();
+        totalStates++;
+        encodeChannelState(n.state, n.duration, last, codeSeq);
+        for (size_t i = 0; i < codeSeq.size(); i++) {
+          AlphaCode c = 1 << 8 | codeSeq[i];
+          totalBytes++;
+          frequencyMap[c]++;
+          branchMap[lastCode][c]++;
+          codeSequences[subsong][channel].emplace_back(c);
+          lastCode = c;
+        }
+        last = n.state;
+      }      
+      totalBytes++;
+      frequencyMap[0]++;
+      branchMap[lastCode][0]++;
+      codeSequences[subsong][channel].emplace_back(0);
+    }
+  }
+
+  // index all distinct codes into an "alphabet" so we can build a suffix tree
+  std::vector<AlphaCode> alphabet;
+  std::map<AlphaCode, AlphaChar> index;
+  createAlphabet(
+    frequencyMap,
+    alphabet,
+    index
+  );
+
+  // statistics
+  size_t singletons = 0;
+  size_t bigrams = 0;
+  size_t maxbranch = 0;
+  AlphaCode maxcode = 0;
+  for (auto& x : branchMap) {
+    bigrams += x.second.size();
+    if (x.second.size() > maxbranch) {
+      maxbranch = x.second.size();
+      maxcode = x.first;
+    }
+    if (x.second.size() == 1) {
+      singletons++;
+    }
+  }
+  logD("total codes : %d ", frequencyMap.size());
+  logD("maxbranch %08x : %d ", maxcode, maxbranch);
+  logD("singletons : %d ", singletons);
+  logD("bigrams : %d ", bigrams);
+
+  // debugging: compute basic stats
+  logD("total number of state transitions: %d", totalStates);
+  logD("total number of byte codes: %d", totalBytes);
+  logD("distinct codes: %d", alphabet.size());  
+  for (auto a : alphabet) {
+    logD("  %08x -> %d (rank %d)", a, frequencyMap[a], index.at(a));
+  }
+  CALC_ENTROPY(frequencyMap);
+  
+
+  for (size_t subsong = 0; subsong < e->song.subsong.size(); subsong++) {
+    for (int channel = 0; channel < 2; channel += 1) {
+      std::vector<AlphaChar> alphaSequence;
+      alphaSequence.reserve(codeSequences[subsong][channel].size());         
+
+      // copy string into alphabet
+      for (auto code : codeSequences[subsong][channel]) {
+        AlphaChar c = index.at(code);
+        alphaSequence.emplace_back(c);
+      }
+
+      // create suffix tree 
+      SuffixTree *root = createSuffixTree(
+        alphabet,
+        alphaSequence
+      );
+
+      // compress
+      std::vector<Span> spans;
+      Span currentSpan((int)subsong, channel, 0, 0);
+      Span nextSpan((int)subsong, channel, 0, 0);
+      std::vector<std::map<AlphaCode, size_t>> jumpMaps;
+      jumpMaps.resize(alphaSequence.size());
+      for (size_t i = 0; i < alphaSequence.size(); ) {
+        root->find_prior(i, alphaSequence, nextSpan);
+        if (nextSpan.length > 4) {
+          // take prior span
+          if (currentSpan.length > 0) {
+            spans.emplace_back(currentSpan);
+          }
+          spans.emplace_back(nextSpan);
+          jumpMaps[i][nextSpan.start] += 1;
+          size_t returnPoint = i + nextSpan.length;
+          size_t nextSpanEnd = nextSpan.start + nextSpan.length;
+          for (size_t j = nextSpan.start; j < nextSpanEnd; j++) {
+            jumpMaps[j][CODE_JUMP(j+1)]++;
+          }
+          i += nextSpan.length;
+          currentSpan.start = i;
+          currentSpan.length = 0;
+          jumpMaps[nextSpanEnd][CODE_JUMP(returnPoint)] += 1;
+        } else {
+          // continue current span
+          jumpMaps[i][CODE_JUMP(i+1)] = 1;
+          currentSpan.length++;
+          i++;
+        }
+      }
+      if (currentSpan.length > 0) {
+        spans.emplace_back(currentSpan);
+      }
+      size_t maxJumps = 0;
+      for (auto &jumpMap : jumpMaps) {
+        if (jumpMap.size() > maxJumps) {
+          maxJumps = jumpMap.size();
+        }
+      }
+
+     size_t bitsNeeded = 0;
+      std::vector<AlphaCode> compressedSequence;
+      std::vector<AlphaCode> jumps;
+      size_t lastSpanEnd = 0;
+      for (auto &span: spans) {
+        size_t nextSpanEnd = span.start + span.length;
+        if (span.start < lastSpanEnd) {
+          // write a mandatory jump
+          auto &jumpMap = jumpMaps[nextSpanEnd];
+          bitsNeeded += 1;
+          if (jumpMap.size() > 1) {
+            logD("?? graph %d", jumpMap.size());
+          }
+          jumps.emplace_back(0xf0);
+          jumps.emplace_back(0xf0);
+        } else {
+          for (size_t i = span.start; i < span.start + span.length; i++) {
+            auto &jumpMap = jumpMaps[i];
+            if (jumpMap.size() > 1) {
+              bitsNeeded += CALC_ENTROPY(jumpMap);
+            }
+            for (size_t i = 1; i < jumpMap.size(); i++) {
+              jumps.emplace_back(0xf0);
+              jumps.emplace_back(0xf0);
+            }
+            compressedSequence.emplace_back(codeSequences[subsong][channel][i]);
+          }
+        }
+        lastSpanEnd += span.length;
+      }
+      logD("maxbytes %d", maxJumps);
+      logD("COMPRESSEDSIZE %d", compressedSequence.size());
+      logD("JUMPS %d", jumps.size());
+      logD("BITSTREAMESTIMATE %d (%d)", ((bitsNeeded + 8)/ 8), bitsNeeded);
+      logD("total %d", jumps.size() + compressedSequence.size() + ((bitsNeeded + 8)/ 8));
+      // for (size_t i = 0; i < codeSequences[subsong][channel].size(); i++) {
+      //   assert(codeSequences[subsong][channel][i] == compressedSequence[i]);
+      // }
+      
+      //  i = 0; i < alphaSequence.size(); ) {
+      //   root->find_prior(i, alphaSequence, nextSta);
+      //   if (s.length > 4) {
+      //     jumpStreamBits += 1;
+      //     for (int j = s.start; j < s.start + s.length; j++) {
+      //       if (jumps[j].size() > 1) {
+      //         jumpStreamBits += 1;
+      //       }
+      //     }
+      //     jumpStreamBits += jumps[s.start + s.length].size();
+      //     i += s.length;
+      //   } else {
+      //     i++;
+      //   }
+      // }
+      // logD("ESTIMATED %d / %d", estimatedBytes, alphaSequence.size());
+      // logD("JUMPSTREAM BYTES %d (%d) MAX=%d", ((jumpStreamBits + 8) / 8), jumpStreamBits, maxJumps);
+
+      // clean up
+      delete root;
+
+    }
+  }
+
+  testCV("abaxcabaxabz");
+
+  ret.push_back(DivROMExportOutput("Track_data.asm", trackData));
+
+}
+
 /**
  *  Write note data. Format 0:
  * 
- *   fffff010 wwwwvvvv           frequency + waveform + volume, duration 1
- *   fffff110 wwwwvvvv           " " ", duration 2
+ *   fffff010 ccccvvvv           frequency + control + volume, duration 1
+ *   fffff110 ccccvvvv           " " ", duration 2
  *   ddddd100                    sustain d frames
  *   ddddd000                    pause d frames
  *   xxxx0001                    volume = x >> 4, duration 1 
  *   xxxx1001                    volume = x >> 4, duration 2
- *   xxxx0101                    wave = x >> 4, duration 1
- *   xxxx1101                    wave = x >> 4, duration 2
+ *   xxxx0101                    control = x >> 4, duration 1
+ *   xxxx1101                    control = x >> 4, duration 2
  *   xxxxx011                    frequency = x >> 3, duration 1
  *   xxxxx111                    frequency = x >> 3, duration 2
  *   00000000                    stop
  */
-size_t DivExportAtari2600::writeNoteCompact(SafeWriter* w, const ChannelState& next, const char duration, const ChannelState& last) {
+size_t DivExportAtari2600::encodeChannelState(
+  const ChannelState& next,
+  const char duration,
+  const ChannelState& last,
+  std::vector<unsigned char> &out)
+{
   size_t bytesWritten = 0;
 
   // when duration is zero... some kind of rounding issue has happened... we force to 1...
@@ -708,14 +1001,15 @@ size_t DivExportAtari2600::writeNoteCompact(SafeWriter* w, const ChannelState& n
   vc = audvx != last.registers[2];
   int delta = (cc + fc + vc);
   
-  w->writeText(fmt::sprintf("    ;F%d C%d V%d D%d\n", audfx, audcx, audvx, duration));
+  //w->writeText(fmt::sprintf("    ;F%d C%d V%d D%d\n", audfx, audcx, audvx, duration));
 
   if (audvx == 0) {
     // volume is zero, pause
     unsigned char dmod = framecount > 31 ? 31 : framecount;
     framecount -= dmod;
     unsigned char rx = dmod << 3;
-    w->writeText(fmt::sprintf("    byte %d; PAUSE %d\n", rx, dmod));
+    //w->writeText(fmt::sprintf("    byte %d; PAUSE %d\n", rx, dmod));
+    out.emplace_back(rx);
     bytesWritten += 1;
     
   } else if ( delta == 1 ) {
@@ -734,13 +1028,14 @@ size_t DivExportAtari2600::writeNoteCompact(SafeWriter* w, const ChannelState& n
       // frequency
       rx = audfx << 3 | dmod << 2 | 0x03; //  d11
     } else if (cc > 0 ) {
-      // waveform
+      // control
       rx = audcx << 4 | dmod << 3 | 0x05; // d101
     } else {
       // volume 
       rx = audvx << 4 | dmod << 3 | 0x01; // d001
     }
-    w->writeText(fmt::sprintf("    byte %d\n", rx));
+    //w->writeText(fmt::sprintf("    byte %d\n", rx));
+    out.emplace_back(rx);
     bytesWritten += 1;
 
   } else if ( delta > 1 ) {
@@ -755,13 +1050,15 @@ size_t DivExportAtari2600::writeNoteCompact(SafeWriter* w, const ChannelState& n
     }
 
     // frequency
-    unsigned char x = audfx << 3 | dmod << 2 | 0x02;
-    w->writeText(fmt::sprintf("    byte %d", x));
+    unsigned char fdx = audfx << 3 | dmod << 2 | 0x02;
+    //w->writeText(fmt::sprintf("    byte %d", x));
+    out.emplace_back(fdx);
     bytesWritten += 1;
 
     // waveform and volume
-    unsigned char y = (audcx << 4) + audvx;
-    w->writeText(fmt::sprintf(",%d\n", y));
+    unsigned char cvx = (audcx << 4) + audvx;
+    //w->writeText(fmt::sprintf(",%d\n", y));
+    out.emplace_back(cvx);
     bytesWritten += 1;
 
   }
@@ -777,85 +1074,8 @@ size_t DivExportAtari2600::writeNoteCompact(SafeWriter* w, const ChannelState& n
       framecount = 0;
     }
     unsigned char sx =  dmod << 3 | 0x04;
-    w->writeText(fmt::sprintf("    byte %d; SUSTAIN %d\n", sx, dmod + 1));
-    bytesWritten += 1;
-  }
-
-  return bytesWritten;
-
-}
-
-/**
- * Write note data. Format 1:
- * 
- * 1111 hhhh llll llll
- * 1110 hhhh llll llll
- * 110 fffff cccc vvvv
- * 101 fffff
- * 1001 vvvv
- * 1000 cccc
- * 01xx xxxx lookup
- * 00dd dddd sustain
- * 0000 0000
- * 
- */
-size_t DivExportAtari2600::writeNoteDelta(SafeWriter* w, const ChannelState& next, const char duration, const ChannelState& last) {
-  size_t bytesWritten = 0;
-
-  if (duration == 0) {
-      logD("0 duration note");
-  }
-
-  unsigned char audfx, audcx, audvx;
-  int cc, fc, vc;
-  audcx = next.registers[0];
-  cc = audcx != last.registers[0];
-  audfx = next.registers[1];
-  const char fmod = audfx - last.registers[1];
-  fc = audfx != last.registers[1];
-  audvx = next.registers[2];
-  vc = audvx != last.registers[2];
-  
-  w->writeText(fmt::sprintf("    ;%d %d %d\nc", last.registers[0], last.registers[1], last.registers[2]));
-  w->writeText(fmt::sprintf("    ;F%d C%d V%d D%d %d %d %d %d\n", audfx, audcx, audvx, duration, cc, fc, vc, fmod));
-
-  // write register change
-  if ( ((cc + fc + vc) == 1) ) { 
-    // write a delta row - only change one register
-    unsigned char rx;
-    if (fc > 0) {
-      // frequency
-      rx = 0xa0 | audfx; // 101fffff 
-    } else if (cc > 0) {
-      // control
-      rx = 0x80 | audcx; // 1000cccc
-    } else {
-      // volume 
-      rx = 0x90 | audvx ; // 1001vvvv
-    }
-    w->writeText(fmt::sprintf("    byte %d\n", rx));
-    bytesWritten += 1;
-
-  } else {
-    // write all registers
-    // frequency
-    unsigned char x = 0xc0 | audfx;
-    w->writeText(fmt::sprintf("    byte %d", x));
-    bytesWritten += 1;
-    // waveform and volume
-    unsigned char y = (audcx << 4) + audvx;
-    w->writeText(fmt::sprintf(",%d\n", y));
-    bytesWritten += 1;
-
-  }
-
-  unsigned char framecount = duration > 0 ? duration : 1; 
-
-  while (framecount > 0) {
-    unsigned char dmod = (framecount > 15) ? 15 : framecount;
-    framecount = framecount - dmod;
-    unsigned char sx = 0x10 | dmod;
-    w->writeText(fmt::sprintf("    byte %d; SUSTAIN\n", sx));
+    //w->writeText(fmt::sprintf("    byte %d; SUSTAIN %d\n", sx, dmod + 1));
+    out.emplace_back(sx);
     bytesWritten += 1;
   }
 

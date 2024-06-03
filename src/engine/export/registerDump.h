@@ -24,10 +24,6 @@
 
 const int TICKS_PER_SECOND = 1000000;
 
-typedef uint64_t AlphaCode;
-typedef uint64_t SpanCode;
-typedef int AlphaChar;
-
 struct PatternIndex {
   String key;
   unsigned short subsong, ord, chan, pat;

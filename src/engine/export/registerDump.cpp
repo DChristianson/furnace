@@ -18,7 +18,6 @@
  */
 
 #include "registerDump.h"
-#include <queue>
 
 void registerDump(
   DivEngine* e, 

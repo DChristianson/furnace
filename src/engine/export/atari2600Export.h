@@ -28,7 +28,8 @@ enum DivExportTIAType {
   DIV_EXPORT_TIA_BASIC,   // simple 2 channel sound driver
   DIV_EXPORT_TIA_BASICX,  // simple 2 channel sound driver with sustain (duration)
   DIV_EXPORT_TIA_DELTA,   // simple 2 channel delta-encoded sound driver
-  DIV_EXPORT_TIA_COMPACT  // advanced compressed music driver 
+  DIV_EXPORT_TIA_COMPACT, // compacted tracker pattern
+  DIV_EXPORT_TIA_CRUSHED  // crushed graph compactor
 };
 
 class DivExportAtari2600 : public DivROMExport {
@@ -99,8 +100,17 @@ class DivExportAtari2600 : public DivROMExport {
     std::vector<DivROMExportOutput> &ret
   );
 
-  size_t writeNoteDelta(SafeWriter* w, const ChannelState& next, const char duration, const ChannelState& last);
-  size_t writeNoteCompact(SafeWriter* w, const ChannelState& next, const char duration, const ChannelState& last);
+  //
+  // crushed encoding 
+  // compressed sequences
+  //
+  void writeTrackDataCrushed(
+    DivEngine* e, 
+    std::vector<RegisterWrite> *registerWrites,
+    std::vector<DivROMExportOutput> &ret
+  );
+
+  size_t encodeChannelState(const ChannelState& next, const char duration, const ChannelState& last, std::vector<unsigned char> &out);
 
 public:
 
