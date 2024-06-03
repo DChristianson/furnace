@@ -20,6 +20,14 @@
 #ifndef _SUFFIXTREE_H
 #define _SUFFIXTREE_H
 
+#include "../../ta-utils.h"
+
+typedef uint64_t AlphaCode;
+typedef uint64_t SpanCode;
+typedef int AlphaChar;
+
+bool compareFrequency(std::pair<AlphaCode, size_t> &a, std::pair<AlphaCode, size_t> &b);
+
 struct Span {
 
   int    subsong;
@@ -132,13 +140,24 @@ struct SuffixTree {
 
   void compute_slink(const std::vector<AlphaChar> &S);
 
+  /**
+   * Index of leftmost substring starting at parent node.
+   */
   size_t substring_start() const;
 
+  /**
+   * End of leftmost substring starting at parent node.
+   */
   size_t substring_end() const;
 
   size_t substring_len() const;
 
   SuffixTree *find(const std::vector<AlphaChar> &K, const std::vector<AlphaChar> &S);
+
+  /**
+   * Find Prior(i) - the longest prefix of S[i...n-1] that also occurs in S[0...i]
+   */
+  void find_prior(const size_t i, const std::vector<AlphaChar> &S, Span &span);
 
   /**
    * @brief find all the leaves in this node's subtree
@@ -199,24 +218,18 @@ void translateString(
 void testCommonSubsequences(const String &input);
 
 
-void writeAlphaCodesToChannel(
-    int channel,
-    const TiaRegisterMask &registerMask,
-    int *values,
-    int framesToWrite,
-    std::vector<AlphaCode> &codeSequence
-  ); 
-  void encodeCopySequence(
-    const std::vector<AlphaCode> &sequence, 
-    const Span &bounds,
-    const std::vector<Span> &copySequence,
-    std::vector<AlphaCode> &encodedSequence);
+void testCV(const String &input);
 
-  void encodeDeltaSequence(
-    const std::vector<AlphaCode> &sequence, 
-    const Span &bounds,
-    std::vector<AlphaCode> &encodedSequence);
 
-  size_t writeAlphaCode(SafeWriter* w, SafeWriter* b, AlphaCode code, const std::map<AlphaCode, size_t> &commandDictionary);
+void encodeCopySequence(
+  const std::vector<AlphaCode> &sequence, 
+  const Span &bounds,
+  const std::vector<Span> &copySequence,
+  std::vector<AlphaCode> &encodedSequence);
 
-#endif
+void encodeDeltaSequence(
+  const std::vector<AlphaCode> &sequence, 
+  const Span &bounds,
+  std::vector<AlphaCode> &encodedSequence);
+
+#endif // _SUFFIXTREE_H
