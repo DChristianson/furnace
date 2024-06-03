@@ -144,11 +144,30 @@ void DivExportAtari2600::writeRegisterDump(
   dump->writeText(fmt::sprintf("; Author: %s\n", e->song.author));
 
   for (size_t subsong = 0; subsong < e->song.subsong.size(); subsong++) {
+    int maxFrames = 0;
+
+    dump->writeText(fmt::sprintf("\n; Song %d\n", subsong));
+
     for (auto &write : registerWrites[subsong]) {
-      dump->writeText(fmt::sprintf("; IDX%d %d.%d: SS%d ORD%d ROW%d SYS%d> %d = %d\n",
+
+      int currentTicks = write.ticks;
+      int currentSeconds = write.seconds;
+      int freq = ((float)TICKS_PER_SECOND) / write.hz;
+
+      int totalTicks = currentTicks  + 
+        (TICKS_PER_SECOND * currentSeconds);
+      int totalFrames = totalTicks / freq;
+      int totalFramesR = totalTicks - (totalFrames * freq);
+      if (totalFrames > maxFrames) {
+        maxFrames = totalFrames;
+      }
+
+      dump->writeText(fmt::sprintf("; %d T%d.%d F%d.%d: SS%d ORD%d ROW%d SYS%d> %d = %d\n",
         write.writeIndex,
         write.seconds,
         write.ticks,
+        totalFrames,
+        totalFramesR,
         write.rowIndex.subsong,
         write.rowIndex.ord,
         write.rowIndex.row,
@@ -157,7 +176,14 @@ void DivExportAtari2600::writeRegisterDump(
         write.val
       ));
     }
+
+    dump->writeText("\n");
+    dump->writeText(fmt::sprintf("; Writes: %d\n", registerWrites[subsong].size()));
+    dump->writeText(fmt::sprintf("; Frames: %d\n", maxFrames));
+    dump->writeText("\n");
+
   }
+
   ret.push_back(DivROMExportOutput("RegisterDump.txt", dump));
 
 }
