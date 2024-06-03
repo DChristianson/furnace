@@ -993,7 +993,7 @@ void DivExportAtari2600::writeTrackDataCrushed(
  * 
  *   fffff010 ccccvvvv           frequency + control + volume, duration 1
  *   fffff110 ccccvvvv           " " ", duration 2
- *   ddddd100                    sustain d frames
+ *   ddddd100                    sustain d+1 frames
  *   ddddd000                    pause d frames
  *   xxxx0001                    volume = x >> 4, duration 1 
  *   xxxx1001                    volume = x >> 4, duration 2
