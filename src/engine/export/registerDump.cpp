@@ -38,8 +38,8 @@ void registerDump(
   while (!done && e->isPlaying()) {
     
     done = e->nextTick(false, true);
-    if (done) break;
     nextTickCount += 1;
+    if (done) break;
 
     // get register writes
     for (int i=0; i<e->song.systemLen; i++) {

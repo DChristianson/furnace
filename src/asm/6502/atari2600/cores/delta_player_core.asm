@@ -94,6 +94,7 @@ _set_all_registers
             bcc _set_suspause          ; 00......|?0 if clear we are suspausing
             lsr                        ; 0000fffff|C10 pull duration bit
             sta audio_fx,x             ; store frequency
+            rol audio_timer,x          ; set new timer to 0 or 1 depending on carry bit
             iny                        ; advance 1 byte
             lda AUDIO_DATA-1,y         ; ccccvvvv|
             sta audio_vx,x             ; store volume
@@ -102,7 +103,7 @@ _set_all_registers
             lsr                        ; 000ccccv|
             lsr                        ; 0000cccc|
             sta audio_cx,x             ; store control
-            bpl _set_timer_delta       ; jump to duration (note: should always be positive)
+            bpl _audio_advance_note    ; done (note: should always be positive)
 _set_suspause
             lsr                        ; 000ddddd|?00 if set we are sustaining
             sta audio_timer,x          ;
