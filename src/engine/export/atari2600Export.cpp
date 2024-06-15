@@ -32,6 +32,54 @@ const int AUDF1 = 0x18;
 const int AUDV0 = 0x19;
 const int AUDV1 = 0x1A;
 
+
+// DONE
+//  - alpha
+//  - output schemes
+//    - delta player
+//    - simple player
+//    - simple player with duration
+//  - testability
+//    - assemble test songs
+//      - karri songs
+//      - short 
+//    - automate process and build
+//      - all songs X all compressions
+//    - automate headless stella run + capture reg writes
+// BETA 
+//  - testability
+//    - automate headless stella run log comparison
+//  - debugging
+//    - debug output for byte codes
+//    - debug output for LS spans
+//  - suffix encoding tools
+//    - multi-byte alpha code scheme
+//  - compression experiments
+//    - "markov" spans
+//    - "stack" push/pop
+//    - "basic" dictionary
+//  - glitches
+//    - TIA_Spanish_Fly is slow again
+//  - compression goals
+//    - Coconut... small in 4k
+//    - Coconut_Mall in 4k
+//  - output schemes
+//    - batari basic player
+//    - markov player
+//    - stack player
+//  - dev help
+//    - docs on how to use multiple schemes
+//    - makefile aware of song size / compression
+// STRETCH
+//  - bank switching
+//  - direct rom export
+//  - 7800 support
+//  - Atari 8-bit export
+//
+// NOT DO
+//  - DPC export
+//  - hi-freq export 
+
 std::map<unsigned int, unsigned int> channel0AddressMap = {
   {AUDC0, 0},
   {AUDF0, 1},
@@ -726,6 +774,11 @@ void DivExportAtari2600::writeTrackDataCompact(
 
 }
 
+enum CODE_TYPE {
+  LITERAL,
+  JUMP
+};
+
 // BUGBUG: make macro/inline
 AlphaCode CODE_LITERAL(unsigned char x) {
   return (AlphaCode)x;
@@ -733,7 +786,11 @@ AlphaCode CODE_LITERAL(unsigned char x) {
 
 // BUGBUG: make macro/inline
 AlphaCode CODE_JUMP(size_t index) {
-  return (AlphaCode)(0xff0000 | index);
+  return (AlphaCode)(0x10000 | index);
+}
+
+CODE_TYPE GET_CODE_TYPE(const AlphaCode code) {
+  return (CODE_TYPE)(code >> 26);
 }
 
 size_t CALC_ENTROPY(const std::map<AlphaCode, size_t> &frequencyMap) {
@@ -806,7 +863,7 @@ void DivExportAtari2600::writeTrackDataCrushed(
         totalStates++;
         encodeChannelState(n.state, n.duration, last, codeSeq);
         for (size_t i = 0; i < codeSeq.size(); i++) {
-          AlphaCode c = 1 << 8 | codeSeq[i];
+          AlphaCode c = CODE_LITERAL(codeSeq[i]);
           totalBytes++;
           frequencyMap[c]++;
           branchMap[lastCode][c]++;
@@ -878,12 +935,14 @@ void DivExportAtari2600::writeTrackDataCrushed(
         alphaSequence
       );
 
-      // compress
+      // greedily find spans to compress with 
       std::vector<Span> spans;
       Span currentSpan((int)subsong, channel, 0, 0);
       Span nextSpan((int)subsong, channel, 0, 0);
-      std::vector<std::map<AlphaCode, size_t>> jumpMaps;
-      jumpMaps.resize(alphaSequence.size());
+      std::vector<size_t> copyMap;
+      copyMap.resize(alphaSequence.size());
+      std::vector<std::map<AlphaCode, size_t>> jumpMap;
+      jumpMap.resize(alphaSequence.size());
       for (size_t i = 0; i < alphaSequence.size(); ) {
         root->find_prior(i, alphaSequence, nextSpan);
         if (nextSpan.length > 4) {
@@ -892,19 +951,24 @@ void DivExportAtari2600::writeTrackDataCrushed(
             spans.emplace_back(currentSpan);
           }
           spans.emplace_back(nextSpan);
-          jumpMaps[i][nextSpan.start] += 1;
-          size_t returnPoint = i + nextSpan.length;
           size_t nextSpanEnd = nextSpan.start + nextSpan.length;
-          for (size_t j = nextSpan.start; j < nextSpanEnd; j++) {
-            jumpMaps[j][CODE_JUMP(j+1)]++;
+          for (size_t j = nextSpan.start; j < nextSpanEnd; j++, i++) {
+            size_t nextCodeAddr = copyMap[j];
+            copyMap[i] = nextCodeAddr;
+            if (i > 0) {
+              size_t lastCodeAddr = copyMap[i - 1];
+              jumpMap[lastCodeAddr][CODE_JUMP(nextCodeAddr)]++;
+            }
           }
-          i += nextSpan.length;
           currentSpan.start = i;
           currentSpan.length = 0;
-          jumpMaps[nextSpanEnd][CODE_JUMP(returnPoint)] += 1;
         } else {
           // continue current span
-          jumpMaps[i][CODE_JUMP(i+1)] = 1;
+          if (i > 0) {
+            size_t lastCodeAddr = copyMap[i - 1];
+            jumpMap[lastCodeAddr][CODE_JUMP(i)]++;
+          }
+          copyMap[i] = i;
           currentSpan.length++;
           i++;
         }
@@ -912,51 +976,79 @@ void DivExportAtari2600::writeTrackDataCrushed(
       if (currentSpan.length > 0) {
         spans.emplace_back(currentSpan);
       }
-      size_t maxJumps = 0;
-      for (auto &jumpMap : jumpMaps) {
-        if (jumpMap.size() > maxJumps) {
-          maxJumps = jumpMap.size();
-        }
-      }
+      logD("Span Transitions %d", spans.size());
 
-     size_t bitsNeeded = 0;
+
       std::vector<AlphaCode> compressedSequence;
-      std::vector<AlphaCode> jumps;
+      std::map<AlphaCode, size_t> compressedFrequencyMap;
+      std::vector<AlphaCode> jumpStream;
       size_t lastSpanEnd = 0;
       for (auto &span: spans) {
-        size_t nextSpanEnd = span.start + span.length;
-        if (span.start < lastSpanEnd) {
-          // write a mandatory jump
-          auto &jumpMap = jumpMaps[nextSpanEnd];
-          bitsNeeded += 1;
-          if (jumpMap.size() > 1) {
-            logD("?? graph %d", jumpMap.size());
-          }
-          jumps.emplace_back(0xf0);
-          jumps.emplace_back(0xf0);
+        if (lastSpanEnd > span.start) {
+          // encode jump to prior span and back
         } else {
+          // encode span
           for (size_t i = span.start; i < span.start + span.length; i++) {
-            auto &jumpMap = jumpMaps[i];
-            if (jumpMap.size() > 1) {
-              bitsNeeded += CALC_ENTROPY(jumpMap);
-            }
-            for (size_t i = 1; i < jumpMap.size(); i++) {
-              jumps.emplace_back(0xf0);
-              jumps.emplace_back(0xf0);
-            }
-            compressedSequence.emplace_back(codeSequences[subsong][channel][i]);
+            AlphaCode c = codeSequences[subsong][channel][i];
+            compressedSequence.emplace_back(c);
+            compressedFrequencyMap[c]++;
           }
         }
-        lastSpanEnd += span.length;
+        lastSpanEnd = span.start + span.length;
       }
-      logD("maxbytes %d", maxJumps);
-      logD("COMPRESSEDSIZE %d", compressedSequence.size());
-      logD("JUMPS %d", jumps.size());
-      logD("BITSTREAMESTIMATE %d (%d)", ((bitsNeeded + 8)/ 8), bitsNeeded);
-      logD("total %d", jumps.size() + compressedSequence.size() + ((bitsNeeded + 8)/ 8));
+
+      logD("compressedSequence size %d", compressedSequence.size());
+      logD("jumpStream size %d", jumpStream.size());
+      for (auto x : compressedFrequencyMap) {
+        logD("  %08x -> %d", x.first, x.second);
+      }
+      CALC_ENTROPY(compressedFrequencyMap);
+
+      // size_t maxJumps = 0;
+      // for (auto &jumpMap : jumpMaps) {
+      //   if (jumpMap.size() > maxJumps) {
+      //     maxJumps = jumpMap.size();
+      //   }
+      // }
+
+    //  size_t bitsNeeded = 0;
+    //   std::vector<AlphaCode> jumps;
+    //   size_t lastSpanEnd = 0;
+    //   for (auto &span: spans) {
+    //     size_t nextSpanEnd = span.start + span.length;
+    //     if (span.start < lastSpanEnd) {
+    //       // write a mandatory jump
+    //       auto &jumpMap = jumpMaps[nextSpanEnd];
+    //       bitsNeeded += 1;
+    //       if (jumpMap.size() > 1) {
+    //         logD("?? graph %d", jumpMap.size());
+    //       }
+    //       jumps.emplace_back(0xf0);
+    //       jumps.emplace_back(0xf0);
+    //     } else {
+    //       for (size_t i = span.start; i < span.start + span.length; i++) {
+    //         auto &jumpMap = jumpMaps[i];
+    //         if (jumpMap.size() > 1) {
+    //           bitsNeeded += CALC_ENTROPY(jumpMap);
+    //         }
+    //         for (size_t i = 1; i < jumpMap.size(); i++) {
+    //           jumps.emplace_back(0xf0);
+    //           jumps.emplace_back(0xf0);
+    //         }
+    //         compressedSequence.emplace_back(codeSequences[subsong][channel][i]);
+    //       }
+    //     }
+    //     lastSpanEnd += span.length;
+    //   }
+    //   logD("maxbytes %d", maxJumps);
+    //   logD("JUMPS %d", jumps.size());
+    //   logD("BITSTREAMESTIMATE %d (%d)", ((bitsNeeded + 8)/ 8), bitsNeeded);
+    //   logD("total %d", jumps.size() + compressedSequence.size() + ((bitsNeeded + 8)/ 8));
+
       // for (size_t i = 0; i < codeSequences[subsong][channel].size(); i++) {
       //   assert(codeSequences[subsong][channel][i] == compressedSequence[i]);
       // }
+      // logD("COMPRESSEDSIZE %d", compressedSequence.size());
       
       //  i = 0; i < alphaSequence.size(); ) {
       //   root->find_prior(i, alphaSequence, nextSta);

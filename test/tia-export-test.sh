@@ -19,7 +19,7 @@ for filename in $testDir/export/*.fur; do
     mkdir -p $targetDir
     cp -r $templateDir/* $targetDir
     if [ -e "$configFile" ]; then configOverride=`paste -sd "," $configFile`; fi
-    $FURNACE_ROOT/build/Debug/furnace --conf "$configOverride" --romout $targetDir $filename > $targetDir/furnace_export.log
+    $FURNACE_ROOT/build/Debug/furnace --conf "romout.debugOutput=true,$configOverride" --romout $targetDir $filename > $targetDir/furnace_export.log
     (cd $targetDir && make)
     stella -loglevel 2 -logtoconsole 1 -userdir . -debug $targetDir/roms/MiniPlayer_NTSC.a26 > $targetDir/log.out
 done  
