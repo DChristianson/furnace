@@ -21,6 +21,10 @@ for filename in $testDir/export/*.fur; do
     if [ -e "$configFile" ]; then configOverride=`paste -sd "," $configFile`; fi
     $FURNACE_ROOT/build/Debug/furnace --conf "romout.debugOutput=true,$configOverride" --romout $targetDir $filename > $targetDir/furnace_export.log
     (cd $targetDir && make)
-    stella -loglevel 2 -logtoconsole 1 -userdir . -debug $targetDir/roms/MiniPlayer_NTSC.a26 > $targetDir/log.out
+    romFile=$targetDir/roms/MiniPlayer_NTSC.a26
+    if [[ ! -e "$romFile" ]]; then echo "FAIL: $filename did not compile"; continue; fi
+    stella -loglevel 2 -logtoconsole 1 -userdir . -debug $targetDir/roms/MiniPlayer_NTSC.a26 > $targetDir/stella.log.out
+    python $testDir/diff_stella_log.py $targetDir > $targetDir/test.out
+    if [ $? -ne 0 ]; then echo "FAIL: $filename did not pass stella test"; continue; fi
 done  
 

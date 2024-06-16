@@ -69,11 +69,25 @@ def extend_frames(frames, index):
     while len(frames) <= index:
         frames.append(list(frames[-1]))
 
+def compare_registers(a, b):
+    for channel in [0, 1]:
+        for register in [4, 2, 0]:
+          i = register + channel
+          va = a[i]
+          vb = b[i]
+          if va != vb:
+              return False
+              continue
+          elif register == 4 and va == 0:
+              # short circuit volume
+              break
+    return True
 
 if __name__ == '__main__':
     stella_writes = [[0, 0, 0, 0, 0, 0]]
     first_stella_write = -1
-    with open('log.out') as fp:
+    testDir = sys.argv[1]
+    with open(f'{testDir}/stella.log.out') as fp:
         for frame, scanline, cycle, address, value in parse_stella_log(fp):
             if first_stella_write < 0 and value > 0:
                 first_stella_write = frame
@@ -85,7 +99,7 @@ if __name__ == '__main__':
     expected_writes = [[0, 0, 0, 0, 0, 0]]
     rows = ['']
     first_expected_write = -1
-    with open('RegisterDump.txt') as fp:
+    with open(f'{testDir}/RegisterDump.txt') as fp:
         for write_index, ticks, frame_partial, rowid, address, value in parse_regwrite(fp):
             frame = int(frame_partial)
             if first_expected_write < 0 and value > 0:
@@ -100,9 +114,15 @@ if __name__ == '__main__':
     print(f"read {len(expected_writes)} frames")
     expected_writes = expected_writes[first_expected_write:]
     rows = rows[first_expected_write:]
+    same = True
     for index, (a, b, rowid) in enumerate(zip(stella_writes, expected_writes, rows)):
-        label = 'good' if a == b else '----'
+        if compare_registers(a, b):
+            label = 'good'
+        else:
+            same = False
+            label = '----'
         print(label, index, a, b, rowid)
-
+    if not same:
+        exit(-1)
     
 

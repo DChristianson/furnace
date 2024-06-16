@@ -46,9 +46,10 @@ const int AUDV1 = 0x1A;
 //    - automate process and build
 //      - all songs X all compressions
 //    - automate headless stella run + capture reg writes
-// BETA 
-//  - testability
 //    - automate headless stella run log comparison
+//  - glitches
+//    - TIA_Spanish_Fly is slow again
+// BETA 
 //  - debugging
 //    - debug output for byte codes
 //    - debug output for LS spans
@@ -58,8 +59,6 @@ const int AUDV1 = 0x1A;
 //    - "markov" spans
 //    - "stack" push/pop
 //    - "basic" dictionary
-//  - glitches
-//    - TIA_Spanish_Fly is slow again
 //  - compression goals
 //    - Coconut... small in 4k
 //    - Coconut_Mall in 4k
