@@ -741,6 +741,15 @@ void DivExportAtari2600::writeTrackDataCompact(
     std::vector<unsigned char> codeSeq;
     for (auto& n: dump.intervals) {
       codeSeq.clear();
+      trackData->writeText(
+        fmt::sprintf(
+          "    ;F%d C%d V%d D%d\n",
+          n.state.registers[1],
+          n.state.registers[0],
+          n.state.registers[2],
+          n.duration
+        )
+      );
       waveformDataSize += encodeChannelState(n.state, n.duration, last, codeSeq);
       trackData->writeText("    byte ");
       for (size_t i = 0; i < codeSeq.size(); i++) {
@@ -915,7 +924,6 @@ void DivExportAtari2600::writeTrackDataCrushed(
     logD("  %08x -> %d (rank %d)", a, frequencyMap[a], index.at(a));
   }
   CALC_ENTROPY(frequencyMap);
-  
 
   for (size_t subsong = 0; subsong < e->song.subsong.size(); subsong++) {
     for (int channel = 0; channel < 2; channel += 1) {
@@ -1118,8 +1126,6 @@ size_t DivExportAtari2600::encodeChannelState(
   vc = audvx != last.registers[2];
   int delta = (cc + fc + vc);
   
-  //w->writeText(fmt::sprintf("    ;F%d C%d V%d D%d\n", audfx, audcx, audvx, duration));
-
   if (audvx == 0) {
     // volume is zero, pause
     unsigned char dmod = framecount > 31 ? 31 : framecount;
