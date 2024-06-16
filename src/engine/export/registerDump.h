@@ -92,16 +92,20 @@ struct ChannelState {
   ChannelState() {}
 
   ChannelState(unsigned char c) {
-    memset(registers, c, CHANNEL_REGISTERS);
+    memset(registers, c, CHANNEL_REGISTERS * sizeof(unsigned char));
   }
 
   ChannelState(const ChannelState &c) {
-    memcpy(registers, c.registers, CHANNEL_REGISTERS);
+    memcpy(registers, c.registers, CHANNEL_REGISTERS * sizeof(unsigned char));
   }
 
-  ChannelState& operator=(ChannelState& c) {
-    memcpy(registers, c.registers, CHANNEL_REGISTERS);
+  ChannelState& operator=(const ChannelState& c) {
+    memcpy(registers, c.registers, CHANNEL_REGISTERS * sizeof(unsigned char));
     return *this;
+  }
+
+  void clear() {
+    memset(registers, 0, CHANNEL_REGISTERS * sizeof(unsigned char));
   }
 
   bool write(unsigned int address, unsigned int value) {
@@ -137,9 +141,15 @@ struct ChannelStateInterval {
   ChannelState state;
   int duration;
 
-  ChannelStateInterval(const ChannelStateInterval &n) : state(n.state), duration(n.duration) {}
+  ChannelStateInterval(const ChannelStateInterval &other) : state(other.state), duration(other.duration) {}
 
   ChannelStateInterval(const ChannelState &state, int duration) : state(state), duration(duration) {}
+
+  ChannelStateInterval& operator=(const ChannelStateInterval& other) {
+    state = other.state;
+    duration = other.duration;
+    return *this;
+  }
 
   uint64_t hash() const {
     uint64_t h = state.hash();
@@ -266,6 +276,7 @@ void writeChannelStateSequence(
   int subsong,
   int channel,
   int systemIndex,
+  int suppressVolume,
   const std::map<unsigned int, unsigned int> &addressMap,
   ChannelStateSequence &dumpSequence 
 );
@@ -278,6 +289,7 @@ void writeChannelStateSequenceByRow(
   int subsong,
   int channel,
   int systemIndex,
+  int suppressVolume,
   const std::map<unsigned int, unsigned int> &addressMap,
   std::vector<String> &sequence,
   std::map<String, ChannelStateSequence> &registerDumps 

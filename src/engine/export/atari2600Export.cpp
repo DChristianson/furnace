@@ -49,31 +49,39 @@ const int AUDV1 = 0x1A;
 //    - automate headless stella run log comparison
 //  - glitches
 //    - TIA_Spanish_Fly is slow again
-// BETA 
 //  - debugging
 //    - debug output for byte codes
-//    - debug output for LS spans
+// BETA 
 //  - suffix encoding tools
 //    - multi-byte alpha code scheme
 //  - compression experiments
 //    - "markov" spans
 //    - "stack" push/pop
 //    - "basic" dictionary
+//  - debugging
+//    - debug output for LS spans
 //  - compression goals
 //    - Coconut... small in 4k
 //    - Coconut_Mall in 4k
+//    - breakbeat in 4k
 //  - output schemes
 //    - batari basic player
 //    - markov player
 //    - stack player
+//  - testability
+//    - all targets test
+//    - fix multi-song test
+//    - clean up test output
 //  - dev help
 //    - docs on how to use multiple schemes
 //    - makefile aware of song size / compression
 // STRETCH
+//  - standalone compression tool
 //  - bank switching
 //  - direct rom export
 //  - 7800 support
 //  - Atari 8-bit export
+//  - any other exports
 //
 // NOT DO
 //  - DPC export
@@ -257,6 +265,7 @@ void DivExportAtari2600::writeTrackDataRaw(
         (int) subsong,
         channel,
         0,
+        -1,
         channel == 0 ? channel0AddressMap : channel1AddressMap,
         dumpSequence
       );
@@ -360,6 +369,7 @@ void DivExportAtari2600::writeTrackDataBasic(
         (int) subsong,
         channel,
         0,
+        -1,
         channel == 0 ? channel0AddressMap : channel1AddressMap,
         dumpSequences[subsong][channel]
       );
@@ -523,6 +533,7 @@ void DivExportAtari2600::writeTrackDataDelta(
         (int) subsong,
         channel,
         0,
+        -1,
         channel == 0 ? channel0AddressMap : channel1AddressMap,
         dumpSequence
       );
@@ -531,6 +542,15 @@ void DivExportAtari2600::writeTrackDataDelta(
       std::vector<unsigned char> codeSeq;
       for (auto& n: dumpSequence.intervals) {
         codeSeq.clear();
+        trackData->writeText(
+          fmt::sprintf(
+            "    ;F%d C%d V%d D%d\n",
+            n.state.registers[1],
+            n.state.registers[0],
+            n.state.registers[2],
+            n.duration
+          )
+        );
         trackDataSize += encodeChannelState(n.state, n.duration, last, codeSeq);
         trackData->writeText("    byte ");
         for (size_t i = 0; i < codeSeq.size(); i++) {
@@ -576,22 +596,11 @@ void DivExportAtari2600::writeTrackDataCompact(
         (int) subsong,
         channel,
         0,
+        2,
         channel == 0 ? channel0AddressMap : channel1AddressMap,
         channelSequences[channel],
         registerDumps);
     }
-  }
-
-  // scrunch the register dumps with 0 volume
-  for (auto& x: registerDumps) {
-      for (auto& y: x.second.intervals) {
-        logD("checking 0 volume interval %s %d %d %d %d", x.first, y.state.registers[0], y.state.registers[1], y.state.registers[2], y.duration);
-        if (0 == y.state.registers[2]) {
-          logD("found 0 volume interval");
-          y.state.registers[0] = 0;
-          y.state.registers[1] = 0;
-        }
-      }
   }
 
   // compress the patterns into common subsequences
@@ -739,6 +748,7 @@ void DivExportAtari2600::writeTrackDataCompact(
     auto& dump = registerDumps[x.second];
     ChannelState last(dump.initialState);
     std::vector<unsigned char> codeSeq;
+    int totalDuration = 0;
     for (auto& n: dump.intervals) {
       codeSeq.clear();
       trackData->writeText(
@@ -759,9 +769,11 @@ void DivExportAtari2600::writeTrackDataCompact(
         trackData->writeText(fmt::sprintf("%d", codeSeq[i]));
       }
       trackData->writeC('\n');
+      totalDuration += n.duration;
       last = n.state;
     }
     trackData->writeText("    byte 0\n");
+    trackData->writeText(fmt::sprintf("    ;Total Duration = %d\n", totalDuration));
     waveformDataSize++;
   }
 
@@ -858,6 +870,7 @@ void DivExportAtari2600::writeTrackDataCrushed(
         (int) subsong,
         channel,
         0,
+        -1,
         channel == 0 ? channel0AddressMap : channel1AddressMap,
         dumpSequence
       );

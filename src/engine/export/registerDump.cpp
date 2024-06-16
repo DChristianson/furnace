@@ -96,6 +96,7 @@ void writeChannelStateSequence(
   int subsong,
   int channel,
   int systemIndex,
+  int suppressVolume,
   const std::map<unsigned int, unsigned int> &addressMap,
   ChannelStateSequence &dumpSequence 
 ) {
@@ -121,7 +122,14 @@ void writeChannelStateSequence(
     // check if we've moved in time
     if (lastWriteIndex < currentWriteIndex) {
       if (lastWriteIndex >= 0) {
-        dumpSequence.updateState(currentState);
+        auto lastState = currentState;
+        // if volume register is zero, clear all registers
+        if (suppressVolume >= 0) {
+          if (lastState.registers[suppressVolume] == 0) {
+            lastState.clear();
+          }
+        }
+        dumpSequence.updateState(lastState);
         deltaTicksR = dumpSequence.addDuration(deltaTicks, deltaTicksR, freq);
         deltaTicks = 0;
       }
@@ -153,6 +161,7 @@ void writeChannelStateSequenceByRow(
   int subsong,
   int channel,
   int systemIndex,
+  int suppressVolume,
   const std::map<unsigned int, unsigned int> &addressMap,
   std::vector<String> &sequence,
   std::map<String, ChannelStateSequence> &registerDumps 
@@ -183,7 +192,14 @@ void writeChannelStateSequenceByRow(
     // check if we've moved in time
     if (lastWriteIndex < currentWriteIndex) {
       if (lastWriteIndex >= 0) {
-        currentDumpSequence->updateState(currentState);
+        auto lastState = currentState;
+        // if volume register is zero, clear all registers
+        if (suppressVolume >= 0) {
+          if (lastState.registers[suppressVolume] == 0) {
+            lastState.clear();
+          }
+        }
+        currentDumpSequence->updateState(lastState);
         deltaTicksR = currentDumpSequence->addDuration(deltaTicks, deltaTicksR, freq);
       }
       deltaTicks = 0;
