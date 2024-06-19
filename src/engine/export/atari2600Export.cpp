@@ -797,8 +797,10 @@ void DivExportAtari2600::writeTrackDataCompact(
 }
 
 enum CODE_TYPE {
+  POP,
   LITERAL,
-  JUMP
+  JUMP,
+  GOTO
 };
 
 // BUGBUG: make macro/inline
@@ -822,6 +824,10 @@ AlphaCode CODE_DELTA_LITERAL(const std::vector<unsigned char> &codeSeq) {
 // BUGBUG: make macro/inline
 AlphaCode CODE_JUMP(size_t index) {
   return ((AlphaCode) 2 << 56) | index;
+}
+
+AlphaCode CODE_GOTO(size_t index) {
+  return ((AlphaCode) 3 << 56) | index;
 }
 
 CODE_TYPE GET_CODE_TYPE(const AlphaCode code) {
@@ -1070,7 +1076,7 @@ void DivExportAtari2600::writeTrackDataCrushed(
             // logD("%d: checking code from %d (%d)", i, leftmostCodeAddr, lastSpanEnd);
             lastSpanEnd++;
             size_t nextCodeAddr = copyMap[lastSpanEnd];
-            if (jumpMap[leftmostCodeAddr].size() > 1 || nextCodeAddr != (leftmostCodeAddr + 1)) {
+            if (jumpMap[leftmostCodeAddr].size() > 1) {
               jumpStream.emplace_back(CODE_JUMP(nextCodeAddr));
               // logD("... %d: adding jump %d -> %d", i, leftmostCodeAddr, nextCodeAddr);
             }
@@ -1086,10 +1092,12 @@ void DivExportAtari2600::writeTrackDataCrushed(
             // logD("%d: adding code %08x", i, c);
             if (i + 1 < alphaSequence.size()) {
               size_t nextCodeAddr = copyMap[i+1];
-              if (jumpMap[i].size() > 1 || nextCodeAddr != (i + 1)) {
+              if (jumpMap[i].size() > 1) {
                 compressedSequence.emplace_back(0);
                 // logD("...adding zero %d jump to %d", i, nextCodeAddr);
                 jumpStream.emplace_back(CODE_JUMP(nextCodeAddr));
+              } else if (nextCodeAddr != (i + 1)) {
+                compressedSequence.emplace_back(CODE_GOTO(nextCodeAddr));
               }
             } else {
               jumpStream.emplace_back(0);
@@ -1109,7 +1117,8 @@ void DivExportAtari2600::writeTrackDataCrushed(
       size_t j = 0;
       for (size_t i = 0; i < compressedSequence.size(); ) {
         AlphaCode c = compressedSequence[i];
-        if (c == 0) {
+        CODE_TYPE type = GET_CODE_TYPE(c);
+        if (type == CODE_TYPE::POP) {
           AlphaCode codeJump = *it;
           if (codeJump == 0) {
             AlphaCode x = codeSequences[subsong][channel][j];
@@ -1124,6 +1133,12 @@ void DivExportAtari2600::writeTrackDataCrushed(
           size_t l = labelMap[nextJumpAddress];
           it++;
           i = l;
+        } else if (type == CODE_TYPE::GOTO) {
+          // GOTO
+          size_t nextJumpAddress = GET_CODE_ADDRESS(c);
+          size_t l = labelMap[nextJumpAddress];
+          i = l;
+          
         } else {
           AlphaCode x = codeSequences[subsong][channel][j];
           if (c != x) {
