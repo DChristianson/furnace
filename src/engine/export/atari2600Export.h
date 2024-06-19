@@ -23,13 +23,14 @@
 #include "../engine.h"
 #include "registerDump.h"
 
+
 enum DivExportTIAType {
-  DIV_EXPORT_TIA_RAW,     // raw data export - no driver support 
-  DIV_EXPORT_TIA_BASIC,   // simple 2 channel sound driver
-  DIV_EXPORT_TIA_BASICX,  // simple 2 channel sound driver with sustain (duration)
-  DIV_EXPORT_TIA_DELTA,   // simple 2 channel delta-encoded sound driver
-  DIV_EXPORT_TIA_COMPACT, // compacted tracker pattern
-  DIV_EXPORT_TIA_CRUSHED  // crushed graph compactor
+  DIV_EXPORT_TIA_RAW,       // raw data export - no driver support 
+  DIV_EXPORT_TIA_BASIC,     // simple 2 channel sound driver
+  DIV_EXPORT_TIA_BASIC_RLE, // simple 2 channel sound driver with duration
+  DIV_EXPORT_TIA_TIACOMP,   // TIAComp compact delta encoding
+  DIV_EXPORT_TIA_FSEQ,      // Furnace sequence pattern (DEPRECATED)
+  DIV_EXPORT_TIA_TIAZIP     // TIAZip LZ-based compression
 };
 
 class DivExportAtari2600 : public DivROMExport {
@@ -79,32 +80,32 @@ class DivExportAtari2600 : public DivROMExport {
   );
 
   // 
-  // delta encoding suitable for sound effects and
+  // compact encoding suitable for sound effects and
   // short game music sequences
   //
   // 2 bytes per channel
   // 
-  void writeTrackDataDelta(
+  void writeTrackDataTIAComp(
     DivEngine* e, 
     std::vector<RegisterWrite> *registerWrites,
     std::vector<DivROMExportOutput> &ret
   );
 
   //
-  // compact encoding 
-  // compressed sequences
+  // Sequenced encoding 
+  // uncompressed sequences
   //
-  void writeTrackDataCompact(
+  void writeTrackDataFSeq(
     DivEngine* e, 
     std::vector<RegisterWrite> *registerWrites,
     std::vector<DivROMExportOutput> &ret
   );
 
   //
-  // crushed encoding 
+  // LZ-type encoding 
   // compressed sequences
   //
-  void writeTrackDataCrushed(
+  void writeTrackDataTIAZip(
     DivEngine* e, 
     std::vector<RegisterWrite> *registerWrites,
     std::vector<DivROMExportOutput> &ret
