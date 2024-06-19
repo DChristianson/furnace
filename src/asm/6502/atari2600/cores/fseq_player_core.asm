@@ -116,11 +116,10 @@ _set_all_registers
             sta audio_cx,x             ; store control
             bpl _audio_advance_note    ; done (note: should always be positive)
 _set_suspause
-            lsr                        ; 000ddddd|?00 if set we are sustaining
+            lsr                        ; 000.....|? skip bit 3 (reserved)
+            lsr                        ; 0000dddd|?00 if set we are sustaining
             sta audio_timer,x          ;
             bcs _audio_advance_note
-            adc #-1
-            sta audio_timer,x
             lda #0
             sta audio_vx,x             ; clear volume
 _audio_advance_note

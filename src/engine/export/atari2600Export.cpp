@@ -53,23 +53,29 @@ const int AUDV1 = 0x1A;
 //    - debug output for byte codes
 //  - suffix encoding tools
 //    - multi-byte alpha encode scheme
+//  - compression testing
+//    - encode then decode at AlphaCode
+//  - the good compression
+//    - figure out compression scheme name
 // BETA 
-//  - compression experiments
-//    - crusher "markov" spans with "stack" push/pop
-//      - produce a span with one simple repeat
-//      - produce a span with a cycle
-//      - produce a span with two levels of repeat
-//    - "basic" dictionary
+//  - the good compression
+//    - decoder in assembly
+//    - produce actual bytecode output
+//    - encoding schemes
+//        - JUMP (on 0, check jump stream)
+//        - GOTO (on 0, check jump stream, on 0xf8 go straight to next)
+//        - FORK (on 0x??, read bit off jump stream)
+//        - POP (on 0x??, read from stack )
 //  - debugging
-//    - debug output for LS spans
+//    - proper analytic debug output for TIAZIP spans
+//    - document scheme
 //  - compression goals
+//    - test compression in 4k
 //    - Coconut... small in 4k
-//    - Coconut_Mall in 4k
+//    - Coconut_Mall in 4k  
 //    - breakbeat in 4k
-//  - output schemes
+//  - other output schemes
 //    - batari basic player
-//    - markov player
-//    - stack player
 //  - testability
 //    - all targets test
 //    - fix multi-song test
@@ -77,15 +83,12 @@ const int AUDV1 = 0x1A;
 //  - dev help
 //    - docs on how to use multiple schemes
 //    - makefile aware of song size / compression
+//  - standalone tiazip tool
 // STRETCH
-//  - standalone compression tool
 //  - bank switching
 //  - direct rom export
 //  - 7800 support
 //  - Atari 8-bit export
-//  - any other exports
-//
-// NOT DO
 //  - DPC export
 //  - hi-freq export 
 
@@ -111,20 +114,21 @@ const char* TiaRegisterNames[] = {
 };
 
 DivExportAtari2600::DivExportAtari2600(DivEngine *e) {
-  String exportTypeString = e->getConfString("romout.tiaExportType", "COMPACT");
+  String exportTypeString = e->getConfString("romout.tiaExportType", "FSEQ");
   logD("retrieving config exportType [%s]", exportTypeString);
+  // BUGBUG: cleanse and normalize
   if (exportTypeString == "RAW") {
     exportType = DIV_EXPORT_TIA_RAW;
   } else if (exportTypeString == "BASIC") {
     exportType = DIV_EXPORT_TIA_BASIC;
-  } else if (exportTypeString == "BASICX") {
-    exportType = DIV_EXPORT_TIA_BASICX;
-  } else if (exportTypeString == "DELTA") {
-    exportType = DIV_EXPORT_TIA_DELTA;
-  } else if (exportTypeString == "COMPACT") {
-    exportType = DIV_EXPORT_TIA_COMPACT;
-  } else if (exportTypeString == "CRUSHED") {
-    exportType = DIV_EXPORT_TIA_CRUSHED;
+  } else if (exportTypeString == "BASIC_RLE") {
+    exportType = DIV_EXPORT_TIA_BASIC_RLE;
+  } else if (exportTypeString == "TIACOMP") {
+    exportType = DIV_EXPORT_TIA_TIACOMP;
+  } else if (exportTypeString == "FSEQ") {
+    exportType = DIV_EXPORT_TIA_FSEQ;
+  } else if (exportTypeString == "TIAZIP") {
+    exportType = DIV_EXPORT_TIA_TIAZIP;
   }
   debugRegisterDump = e->getConfBool("romout.debugOutput", false);
 }
@@ -150,17 +154,17 @@ std::vector<DivROMExportOutput> DivExportAtari2600::go(DivEngine* e) {
     case DIV_EXPORT_TIA_BASIC:
       writeTrackDataBasic(e, false, true, registerWrites, ret);
       break;
-    case DIV_EXPORT_TIA_BASICX:
+    case DIV_EXPORT_TIA_BASIC_RLE:
       writeTrackDataBasic(e, true, true, registerWrites, ret);
       break;
-    case DIV_EXPORT_TIA_DELTA:
-      writeTrackDataDelta(e, registerWrites, ret);
+    case DIV_EXPORT_TIA_TIACOMP:
+      writeTrackDataTIAComp(e, registerWrites, ret);
       break;
-    case DIV_EXPORT_TIA_COMPACT:
-      writeTrackDataCompact(e, registerWrites, ret);
+    case DIV_EXPORT_TIA_FSEQ:
+      writeTrackDataFSeq(e, registerWrites, ret);
       break;
-    case DIV_EXPORT_TIA_CRUSHED:
-      writeTrackDataCrushed(e, registerWrites, ret);
+    case DIV_EXPORT_TIA_TIAZIP:
+      writeTrackDataTIAZip(e, registerWrites, ret);
       break;
   }
 
@@ -493,8 +497,8 @@ void DivExportAtari2600::writeTrackDataBasic(
 
 }
 
-// Delta encoding
-void DivExportAtari2600::writeTrackDataDelta(
+// Compact delta encoding
+void DivExportAtari2600::writeTrackDataTIAComp(
   DivEngine* e,
   std::vector<RegisterWrite> *registerWrites,
   std::vector<DivROMExportOutput> &ret
@@ -505,13 +509,13 @@ void DivExportAtari2600::writeTrackDataDelta(
   SafeWriter* trackData = new SafeWriter;
   trackData->init();
   trackData->writeText("; Furnace Tracker audio data file\n");
-  trackData->writeText("; Delta coded format\n");
+  trackData->writeText("; TIAComp delta encoding\n");
   trackData->writeText(fmt::sprintf("; Song: %s\n", e->song.name));
   trackData->writeText(fmt::sprintf("; Author: %s\n", e->song.author));
 
   trackData->writeText(fmt::sprintf("\nAUDIO_NUM_TRACKS = %d\n", numSongs));
   
-  trackData->writeText("\n#include \"cores/delta_player_core.asm\"\n");
+  trackData->writeText("\n#include \"cores/tiacomp_player_core.asm\"\n");
 
   // create a lookup table for use in player apps
   size_t songDataSize = 0;
@@ -580,8 +584,8 @@ void DivExportAtari2600::writeTrackDataDelta(
 
 }
 
-// compacted encoding
-void DivExportAtari2600::writeTrackDataCompact(
+// furnace sequence encoding
+void DivExportAtari2600::writeTrackDataFSeq(
   DivEngine* e, 
   std::vector<RegisterWrite> *registerWrites,
   std::vector<DivROMExportOutput> &ret
@@ -623,7 +627,7 @@ void DivExportAtari2600::writeTrackDataCompact(
   trackData->writeText(fmt::sprintf("; Song: %s\n", e->song.name));
   trackData->writeText(fmt::sprintf("; Author: %s\n", e->song.author));
 
-  trackData->writeText("\n#include \"cores/compact_player_core.asm\"\n");
+  trackData->writeText("\n#include \"cores/fseq_player_core.asm\"\n");
 
   // emit song table
   logD("writing song table");
@@ -866,7 +870,7 @@ size_t CALC_ENTROPY(const std::map<AlphaCode, size_t> &frequencyMap) {
 }
 
 // compacted encoding
-void DivExportAtari2600::writeTrackDataCrushed(
+void DivExportAtari2600::writeTrackDataTIAZip(
   DivEngine* e, 
   std::vector<RegisterWrite> *registerWrites,
   std::vector<DivROMExportOutput> &ret
@@ -877,13 +881,13 @@ void DivExportAtari2600::writeTrackDataCrushed(
   SafeWriter* trackData = new SafeWriter;
   trackData->init();
   trackData->writeText("; Furnace Tracker audio data file\n");
-  trackData->writeText("; Basic data format\n");
+  trackData->writeText("; TIAZip data format\n");
   trackData->writeText(fmt::sprintf("; Song: %s\n", e->song.name));
   trackData->writeText(fmt::sprintf("; Author: %s\n", e->song.author));
 
   trackData->writeText(fmt::sprintf("\nAUDIO_NUM_TRACKS = %d\n", numSongs));
 
-  trackData->writeText("\n#include \"cores/crushed_player_core.asm\"\n");
+  trackData->writeText("\n#include \"cores/tiazip_player_core.asm\"\n");
 
   // encode command streams
   size_t totalStates = 0;
@@ -1179,14 +1183,15 @@ void DivExportAtari2600::writeTrackDataCrushed(
  * 
  *   fffff010 ccccvvvv           frequency + control + volume, duration 1
  *   fffff110 ccccvvvv           " " ", duration 2
- *   ddddd100                    sustain d+1 frames
- *   ddddd000                    pause d frames
+ *   dddd1100                    sustain d+1 frames
+ *   dddd0100                    pause d+1 frames
  *   xxxx0001                    volume = x >> 4, duration 1 
  *   xxxx1001                    volume = x >> 4, duration 2
  *   xxxx0101                    control = x >> 4, duration 1
  *   xxxx1101                    control = x >> 4, duration 2
  *   xxxxx011                    frequency = x >> 3, duration 1
  *   xxxxx111                    frequency = x >> 3, duration 2
+ *   xxxxx000                    reserved
  *   00000000                    stop
  */
 size_t DivExportAtari2600::encodeChannelState(
@@ -1197,7 +1202,7 @@ size_t DivExportAtari2600::encodeChannelState(
 {
   size_t bytesWritten = 0;
 
-  // when duration is zero... some kind of rounding issue has happened... we force to 1...
+  // when duration is zero... some kind of rounding issue has happened upstream... we force to 1...
   if (duration == 0) {
       logD("0 duration note");
   }
@@ -1215,9 +1220,15 @@ size_t DivExportAtari2600::encodeChannelState(
   
   if (audvx == 0) {
     // volume is zero, pause
-    unsigned char dmod = framecount > 31 ? 31 : framecount;
-    framecount -= dmod;
-    unsigned char rx = dmod << 3;
+    unsigned char dmod;
+    if (framecount > 16) {
+      dmod = 15;
+      framecount -= 16;
+    } else {
+      dmod = framecount - 1;
+      framecount = 0;
+    }
+    unsigned char rx = dmod << 4 | 0x04;
     //w->writeText(fmt::sprintf("    byte %d; PAUSE %d\n", rx, dmod));
     out.emplace_back(rx);
     bytesWritten += 1;
@@ -1276,14 +1287,14 @@ size_t DivExportAtari2600::encodeChannelState(
   // when delta is zero / we have leftover frames, sustain
   while (framecount > 0) {
     unsigned char dmod;
-    if (framecount > 32) {
-      dmod = 31;
-      framecount -= 32;
+    if (framecount > 16) {
+      dmod = 15;
+      framecount -= 16;
     } else {
       dmod = framecount - 1;
       framecount = 0;
     }
-    unsigned char sx =  dmod << 3 | 0x04;
+    unsigned char sx =  dmod << 4 | 0x0c;
     //w->writeText(fmt::sprintf("    byte %d; SUSTAIN %d\n", sx, dmod + 1));
     out.emplace_back(sx);
     bytesWritten += 1;

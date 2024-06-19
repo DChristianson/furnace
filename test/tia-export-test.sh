@@ -15,7 +15,7 @@ for filename in $testDir/export/*.fur; do
     configFile="$testDir/export/$target.conf"
     targetDir="$testDir/output/$timestamp/$target"
     echo "processing $sourceFile -> $targetDir"
-    configOverride="romout.tiaExportType=COMPACT"
+    configOverride="romout.tiaExportType=FSEQ"
     mkdir -p $targetDir
     cp -r $templateDir/* $targetDir
     if [ -e "$configFile" ]; then configOverride=`paste -sd "," $configFile`; fi
