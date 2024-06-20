@@ -1,11 +1,16 @@
     MAC AUDIO_VARS
-audio_track         ds 1  ; what track are we on
-audio_channel             ; index to next action in each channel
-audio_channel_0     ds 1  ;
-audio_channel_1     ds 1  ;
-audio_timer               ; time left before next action in each channel
-audio_timer_0       ds 1  ; 
-audio_timer_1       ds 1  ; 
+audio_data_ptr             ; audio register data
+audio_data_0_ptr    ds 2   ; channel 0
+audio_data_1_ptr    ds 2   ; channel 1
+audio_track_ptr            ; audio track data
+audio_track_0_ptr   ds 2   ; channel 0
+audio_track_1_ptr   ds 2   ; channel 1
+audio_timer 
+audio_timer_0       ds 1   ; 
+audio_decode_0      ds 1
+audio_timer_1       ds 1   ; 
+audio_decode_1      ds 1
+audio_track         ds 1
     ENDM
 
     IFNCONST audio_cx
@@ -13,11 +18,6 @@ audio_cx = AUDC0
 audio_fx = AUDF0 
 audio_vx = AUDV0
     ENDIF
-
-    MAC AUDIO_LDA_VIS_PAT
-            ldy audio_channel
-            lda AUDIO_DATA,y
-    ENDM
 
 audio_inc_track
             ldy audio_track
@@ -36,30 +36,25 @@ _audio_track_save
             rts
 
 audio_play_track
-            ldy audio_track
-            lda AUDIO_TRACKS_0,y
-            sta audio_channel_0
-            lda AUDIO_TRACKS_1,y
-            sta audio_channel_1
+            lda audio_track
+            asl
+            asl
+            asl
+            tay
+            ldx #7
+_audio_play_setup_loop
+            lda AUDIO_TRACKS,y
+            sta audio_data_ptr,x
+            iny
+            dex
+            bpl _audio_play_setup_loop
             lda #0
             sta audio_timer_0
             sta audio_timer_1
             rts
 
-; 
-; Delta encoding
-;
-;   fffffd10 ccccvvvv           set frequency / control / volume, hold for 1+d frames
-;   ddddd100                    sustain, hold for 1+d frames
-;   ddddd000                    pause, volume = 0 for +d frames
-;   vvvvd001                    set volume register, hold for 1+d frames
-;   xxxxd101                    set control register, hold for 1+d frames
-;   xxxxxd11                    set frequency register, hold for 1+d frames
-;   00000000                    stop
-;  
-
 audio_update
-            ldx #1 ; loop over both audio channels
+            ldx #2 ; loop over both audio channels
 _audio_loop
             ldy audio_timer,x
             beq _audio_next_note
@@ -67,9 +62,8 @@ _audio_loop
             sty audio_timer,x
             jmp _audio_next_channel
 _audio_next_note
-            ldy audio_channel,x 
-            lda AUDIO_DATA-1,y
-            beq _audio_next_channel    ; check for zero 
+            lda (audio_data_ptr,x)
+            beq _audio_pop             ; check for zero 
             lsr                        ; .......|C pull first bit
             bcc _set_all_registers     ; .......|? if clear go to load all registers
             lsr                        ; 0......|C1 pull second bit
@@ -95,8 +89,8 @@ _set_all_registers
             lsr                        ; 0000fffff|C10 pull duration bit
             sta audio_fx,x             ; store frequency
             rol audio_timer,x          ; set new timer to 0 or 1 depending on carry bit
-            iny                        ; advance 1 byte
-            lda AUDIO_DATA-1,y         ; ccccvvvv|
+            jsr audio_data_advance
+            lda (audio_data_ptr,x)     ; ccccvvvv|
             sta audio_vx,x             ; store volume
             lsr                        ; 0ccccvvv|
             lsr                        ; 00ccccvv|
@@ -105,17 +99,57 @@ _set_all_registers
             sta audio_cx,x             ; store control
             bpl _audio_advance_note    ; done (note: should always be positive)
 _set_suspause
-            lsr                        ; 000.....|? skip bit 3 (reserved)
+            lsr                        ; 000.....|? if not set we are doing a goto
+            bcs _audio_goto
             lsr                        ; 0000dddd|?00 if set we are sustaining
             sta audio_timer,x          ;
             bcs _audio_advance_note
             lda #0
             sta audio_vx,x             ; clear volume
 _audio_advance_note
-            iny
-            sty audio_channel,x
+            jsr audio_data_advance
 _audio_next_channel
+            dex
             dex
             bpl _audio_loop
             rts
+_audio_pop
+            ; pull an address from jump stream
+            lda (audio_track_ptr,x)
+            beq audio_play_track ; restart song
+            sta audio_data_ptr+1,x
+            jsr audio_track_advance
+            lda (audio_track_ptr,x)
+            sta audio_data_ptr,x
+            jsr audio_track_advance
+            jmp _audio_next_note
 
+_audio_goto 
+            ; pull an address from data stream
+            pha
+            jsr audio_data_advance
+            lda (audio_data_ptr,x) 
+            sta audio_data_ptr,x
+            pla
+            sta audio_data_ptr+1,x
+            jmp _audio_next_note
+
+audio_data_advance
+            clc
+            lda audio_data_ptr,x
+            adc #1
+            sta audio_data_ptr,x
+            lda #0
+            adc audio_data_ptr+1,x
+            sta audio_data_ptr+1,x
+            rts
+
+audio_track_advance
+            clc
+            lda audio_track_ptr,x
+            adc #1
+            sta audio_track_ptr,x
+            lda #0
+            adc audio_track_ptr+1,x
+            sta audio_track_ptr+1,x
+            rts            

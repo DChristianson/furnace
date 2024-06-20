@@ -226,7 +226,7 @@ _vis_gradient_setup_loop
             dex
             bpl _vis_gradient_setup_loop
 
-            AUDIO_LDA_VIS_PAT
+            lda audio_fx
             and #$0f
             tax
             lda #$0f

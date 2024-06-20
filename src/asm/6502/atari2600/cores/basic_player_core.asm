@@ -5,13 +5,7 @@ audio_track         ds 1  ;
 audio_channel
 audio_channel_0     ds 1  ;
 audio_channel_1     ds 1  ;
-    ENDM
-
-    MAC AUDIO_LDA_VIS_PAT
-            ldy audio_channel
-            lda AUDIO_F,y
-            adc AUDIO_CV,y
-    ENDM            
+    ENDM           
 
     IFNCONST audio_cx
 audio_cx = AUDC0
