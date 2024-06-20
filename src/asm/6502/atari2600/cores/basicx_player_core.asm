@@ -12,13 +12,7 @@ audio_timer_1       ds 1  ;
 audio_cx = AUDC0
 audio_fx = AUDF0 
 audio_vx = AUDV0
-    ENDIF
-
-    MAC AUDIO_LDA_VIS_PAT
-            ldy audio_channel
-            lda AUDIO_F,y
-            adc AUDIO_CV,y
-    ENDM            
+    ENDIF 
 
 audio_inc_track
             ldy audio_track

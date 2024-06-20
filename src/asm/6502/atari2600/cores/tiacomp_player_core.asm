@@ -14,11 +14,6 @@ audio_fx = AUDF0
 audio_vx = AUDV0
     ENDIF
 
-    MAC AUDIO_LDA_VIS_PAT
-            ldy audio_channel
-            lda AUDIO_DATA,y
-    ENDM
-
 audio_inc_track
             ldy audio_track
             iny
@@ -45,18 +40,6 @@ audio_play_track
             sta audio_timer_0
             sta audio_timer_1
             rts
-
-; 
-; Delta encoding
-;
-;   fffffd10 ccccvvvv           set frequency / control / volume, hold for 1+d frames
-;   ddddd100                    sustain, hold for 1+d frames
-;   ddddd000                    pause, volume = 0 for +d frames
-;   vvvvd001                    set volume register, hold for 1+d frames
-;   xxxxd101                    set control register, hold for 1+d frames
-;   xxxxxd11                    set frequency register, hold for 1+d frames
-;   00000000                    stop
-;  
 
 audio_update
             ldx #1 ; loop over both audio channels

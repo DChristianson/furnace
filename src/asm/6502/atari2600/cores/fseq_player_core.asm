@@ -16,11 +16,6 @@ audio_fx = AUDF0
 audio_vx = AUDV0
     ENDIF
 
-    MAC AUDIO_LDA_VIS_PAT
-            ldy audio_row_idx
-            lda (audio_pattern_ptr),y
-    ENDM
-
 audio_inc_track
             ldy audio_song
             iny
