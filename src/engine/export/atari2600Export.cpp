@@ -61,9 +61,13 @@ const int AUDV1 = 0x1A;
 //    - encoding schemes
 //        - JUMP (on 0, check jump stream)
 //        - GOTO (on 0, check jump stream, on 0xf8 go straight to next)
+//    - successful decoder in assembly
+//  - compression goals
+//    - Coconut... small in 4k
+//    - breakbeat in 4k
+//    - test compression in 4k
 // BETA 
 //  - the good compression
-//    - successful decoder in assembly
 //    - encoding schemes
 //        - FORK (on 0x??, read bit off jump stream)
 //        - POP (on 0x??, read from stack )
@@ -71,10 +75,7 @@ const int AUDV1 = 0x1A;
 //  - debugging
 //    - proper analytic debug output for TIAZIP spans
 //  - compression goals
-//    - test compression in 4k
-//    - Coconut... small in 4k
 //    - Coconut_Mall in 4k  
-//    - breakbeat in 4k
 //  - other output schemes
 //    - batari basic player
 //  - testability
