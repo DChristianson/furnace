@@ -55,11 +55,11 @@ _audio_play_setup_loop
 
 audio_update
             ldx #2 ; loop over both audio channels
+            ldy #1
 _audio_loop
-            ldy audio_timer,x
+            lda audio_timer,x
             beq _audio_next_note
-            dey
-            sty audio_timer,x
+            dec audio_timer,x
             jmp _audio_next_channel
 _audio_next_note
             lda (audio_data_ptr,x)
@@ -69,16 +69,16 @@ _audio_next_note
             lsr                        ; 0......|C1 pull second bit
             bcc _set_cx_vx             ; 0......|?1 if clear we are loading aud(c|v)x
             lsr                        ; 00fffff|C11 pull duration bit for later set
-            sta audio_fx,x             ; store frequency
+            sta audio_fx,y             ; store frequency
             bpl _set_timer_delta       ; jump to duration (note: should always be positive)
 _set_cx_vx  lsr                        ; 00.....|C01
             bcc _set_vx                ; 00.....|?01  
             lsr                        ; 000cccc|C101
-            sta audio_cx,x             ; store control
+            sta audio_cx,y             ; store control
             bpl _set_timer_delta       ; jump to duration (note: should always be positive)
 _set_vx
             lsr                        ; 000vvvv|C001
-            sta audio_vx,x             ; store volume
+            sta audio_vx,y             ; store volume
 _set_timer_delta
             rol audio_timer,x          ; set new timer to 0 or 1 depending on carry bit
             bpl _audio_advance_note    ; done (note: should always be positive)
@@ -87,30 +87,30 @@ _set_all_registers
             lsr                        ; 00......|C0
             bcc _set_suspause          ; 00......|?0 if clear we are suspausing
             lsr                        ; 0000fffff|C10 pull duration bit
-            sta audio_fx,x             ; store frequency
+            sta audio_fx,y             ; store frequency
             rol audio_timer,x          ; set new timer to 0 or 1 depending on carry bit
             jsr audio_data_advance
             lda (audio_data_ptr,x)     ; ccccvvvv|
-            sta audio_vx,x             ; store volume
+            sta audio_vx,y            ; store volume
             lsr                        ; 0ccccvvv|
             lsr                        ; 00ccccvv|
             lsr                        ; 000ccccv|
             lsr                        ; 0000cccc|
-            sta audio_cx,x             ; store control
+            sta audio_cx,y             ; store control
             bpl _audio_advance_note    ; done (note: should always be positive)
 _set_suspause
-            lsr                        ; 000.....|? if not set we are doing a goto
-            bcs _audio_goto
-            lsr                        ; 0000dddd|?00 if set we are sustaining
+            lsr                        ; 000.....|C00 
+            bcc _audio_goto            ; 000.....|?00 if clear we are doing a goto
+            lsr                        ; 0000dddd|C000 if set we are sustaining
             sta audio_timer,x          ;
             bcs _audio_advance_note
             lda #0
-            sta audio_vx,x             ; clear volume
+            sta audio_vx,y             ; clear volume
 _audio_advance_note
             jsr audio_data_advance
 _audio_next_channel
-            dex
-            dex
+            ldx #0
+            dey
             bpl _audio_loop
             rts
 _audio_pop
