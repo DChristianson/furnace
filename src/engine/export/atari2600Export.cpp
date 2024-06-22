@@ -61,6 +61,7 @@ const int AUDV1 = 0x1A;
 //    - encoding schemes
 //        - JUMP (on 0, check jump stream)
 //        - GOTO (on 0, check jump stream, on 0xf8 go straight to next)
+//        - FORK (on 0x??, read bit off jump stream)
 //    - successful decoder in assembly
 //  - compression goals
 //    - Coconut... small in 4k
@@ -69,9 +70,9 @@ const int AUDV1 = 0x1A;
 // BETA 
 //  - the good compression
 //    - encoding schemes
-//        - FORK (on 0x??, read bit off jump stream)
-//        - POP (on 0x??, read from stack )
-//    - estimate span compression savings
+//        - huffman code data stream
+//        - POP jump stream (on 0x??, read from stack )
+//    - use estimate of compression savings to guide span choice
 //  - debugging
 //    - proper analytic debug output for TIAZIP spans
 //  - compression goals
@@ -813,7 +814,8 @@ enum CODE_TYPE {
   POP,
   LITERAL,
   JUMP,
-  GOTO
+  GOTO,
+  SKIP
 };
 
 // BUGBUG: make macro/inline
@@ -828,8 +830,7 @@ AlphaCode CODE_STATE_LITERAL(const ChannelStateInterval &c) {
 
 AlphaCode CODE_DELTA_LITERAL(const std::vector<unsigned char> &codeSeq) {
   AlphaCode c = 0;
-  for (size_t i = codeSeq.size(); i > 0; ) {
-    i--;
+  for (size_t i = codeSeq.size(); i-- != 0; ) {
     c = (c << 8) | codeSeq.at(i);
   }
   return ((AlphaCode) LITERAL << 56) | (codeSeq.size() << 48) | c;
@@ -844,8 +845,16 @@ AlphaCode CODE_GOTO(size_t index) {
   return ((AlphaCode)GOTO << 56) | index;
 }
 
+AlphaCode CODE_SKIP(bool skip) {
+  return ((AlphaCode)SKIP << 56) | (skip ? 1 : 0);
+}
+
 CODE_TYPE GET_CODE_TYPE(const AlphaCode code) {
   return (CODE_TYPE)(code >> 56);
+}
+
+bool GET_CODE_SKIP(AlphaCode code) {
+  return (code & 0xff) > 0;
 }
 
 size_t GET_CODE_SIZE(const AlphaCode c) {
@@ -880,6 +889,21 @@ size_t CALC_ENTROPY(const std::map<AlphaCode, size_t> &frequencyMap) {
   const double expectedBytes = expectedBits / 8;
   logD("entropy: %lf (%lf bits / %lf bytes)", entropy, expectedBits, expectedBytes);
   return ceil(expectedBits);
+}
+
+void SHOW_FREQUENCIES(const std::map<AlphaCode, size_t> &frequencyMap) {
+  std::vector<std::pair<AlphaCode, size_t>> frequencies(
+    frequencyMap.begin(),
+    frequencyMap.end()
+  );
+  std::sort(
+    frequencies.begin(),
+    frequencies.end(),
+    compareCodeFrequency
+  );
+  for (auto &x: frequencies) {
+    logD("  %08x -> %d", x.first, x.second);
+  }
 }
 
 // compacted encoding
@@ -1018,17 +1042,19 @@ void DivExportAtari2600::writeTrackDataTIAZip(
         alphabet,
         alphaSequence
       );
+      
+      // copyMap[i] -> index of leftmost copy of alphaSequence[i]
+      std::vector<size_t> copyMap; 
+      copyMap.resize(alphaSequence.size());
+      
+      // branchFrequencyMap[i] -> frequency of branches from alphaSequence[i]
+      std::vector<std::map<size_t, size_t>> branchFrequencyMap; 
+      branchFrequencyMap.resize(alphaSequence.size());
 
       // greedily find spans to compress with 
       std::vector<Span> spans;
       Span currentSpan((int)subsong, channel, 0, 0);
       Span nextSpan((int)subsong, channel, 0, 0);
-      // copyMap identifies the leftmost copy of every code
-      std::vector<size_t> copyMap;
-      copyMap.resize(alphaSequence.size());
-      // jumpMap identifies branch points in the sequence
-      std::vector<std::map<AlphaCode, size_t>> jumpMap;
-      jumpMap.resize(alphaSequence.size());
       for (size_t i = 0; i < alphaSequence.size(); ) {
         root->find_prior(i, alphaSequence, nextSpan);
         if (nextSpan.length > 5) { // BUGBUG: do trial compression
@@ -1044,7 +1070,7 @@ void DivExportAtari2600::writeTrackDataTIAZip(
             copyMap[i] = nextCodeAddr;
             if (i > 0) {
               size_t lastCodeAddr = copyMap[i - 1];
-              jumpMap[lastCodeAddr][CODE_JUMP(nextCodeAddr)]++;
+              branchFrequencyMap[lastCodeAddr][nextCodeAddr]++;
             }
           }
           currentSpan.start = i;
@@ -1053,7 +1079,7 @@ void DivExportAtari2600::writeTrackDataTIAZip(
           // continue current span
           if (i > 0) {
             size_t lastCodeAddr = copyMap[i - 1];
-            jumpMap[lastCodeAddr][CODE_JUMP(i)]++;
+            branchFrequencyMap[lastCodeAddr][i]++;
           }
           copyMap[i] = i;
           currentSpan.length++;
@@ -1064,6 +1090,25 @@ void DivExportAtari2600::writeTrackDataTIAZip(
         spans.emplace_back(currentSpan);
       }
 
+      // prune all the trivial branch frequencies
+      std::vector<size_t> skipMap;
+      skipMap.resize(branchFrequencyMap.size(), 0);
+      for (size_t i = 0; i < branchFrequencyMap.size(); i++) {
+        auto &branchFrequencies = branchFrequencyMap[i];
+        if (branchFrequencies.size() < 2) {
+          branchFrequencies.clear();
+        }
+        size_t maxFreq = 0;
+        size_t skipIndex = 0;
+        for (auto &x: branchFrequencies) {
+          if (x.second > maxFreq) {
+            maxFreq = x.second;
+            skipIndex = x.first;
+          }
+        }
+        skipMap[i] = skipIndex;
+      }
+ 
       // create compressed sequence
       std::vector<AlphaCode> compressedSequence;
       std::vector<size_t> labelMap;
@@ -1074,23 +1119,30 @@ void DivExportAtari2600::writeTrackDataTIAZip(
       size_t lastSpanEnd = 0;
       for (auto &span: spans) {
         if (lastSpanEnd > span.start) {
-          // walk prior span
+          // traverse prior span
           // logD("%d: traversing prior %d - %d", lastSpanEnd, span.start, span.length);
           for (size_t i = 0; i < span.length; i++) {
             size_t leftmostCodeAddr = copyMap[lastSpanEnd];
-            // logD("%d: checking code from %d (%d)", i, leftmostCodeAddr, lastSpanEnd);
+            // logD("%d: ... ", lastSpanEnd);
             lastSpanEnd++;
             size_t nextCodeAddr = copyMap[lastSpanEnd];
-            if (jumpMap[leftmostCodeAddr].size() > 1) {
-              jumpStream.emplace_back(CODE_JUMP(nextCodeAddr));
+            if (branchFrequencyMap[leftmostCodeAddr].size() > 0) {
               size_t l = nextCodeAddr < lastSpanEnd ? labelMap[nextCodeAddr] : compressedSequence.size();
               labelFrequency[l]++;
-              // logD("... %d: adding jump %d -> %d", i, leftmostCodeAddr, nextCodeAddr);
+              // decide if this is a skip or a take
+              bool skip = nextCodeAddr == skipMap[leftmostCodeAddr];
+              if (skip) {
+                // logD("%d: adding skip @ %d to %d", lastSpanEnd, leftmostCodeAddr, nextCodeAddr);
+                jumpStream.emplace_back(CODE_SKIP(skip));
+              } else {
+                // logD("%d: adding jump @ %d to %d", lastSpanEnd, leftmostCodeAddr, nextCodeAddr);
+                jumpStream.emplace_back(CODE_JUMP(nextCodeAddr));  
+              }
             }
           }
           
         } else {
-          // encode span
+          // encode literal span
           // logD("%d: encoding current %d - %d", lastSpanEnd, span.start, span.length);
           for (size_t i = span.start; i < span.start + span.length; i++) {
             AlphaCode c = codeSequences[subsong][channel][i];
@@ -1099,16 +1151,42 @@ void DivExportAtari2600::writeTrackDataTIAZip(
             // logD("%d: adding code %08x", i, c);
             if (i + 1 < alphaSequence.size()) {
               size_t nextCodeAddr = copyMap[i+1];
-              if (jumpMap[i].size() > 1) {
-                compressedSequence.emplace_back(0);
-                // logD("...adding zero %d jump to %d", i, nextCodeAddr);
-                jumpStream.emplace_back(CODE_JUMP(nextCodeAddr));
+              if (branchFrequencyMap[i].size() > 0) {
+                // jump table
+                compressedSequence.emplace_back(0); // BUGBUG: CODE_POP
+                // logD("%d: pop + jump to %d", i, nextCodeAddr);
+                // auto &jumps = branchFrequencyMap.at(i);
+                // for (auto &x: jumps) {
+                //   if (x.first == nextCodeAddr) {
+                //     logD("%d: -> %d (freq %d)*", i, x.first, x.second);
+                //   } else {
+                //     logD("%d: -> %d (freq %d)", i, x.first, x.second);
+                //   }
+                // }
+                size_t skipAddr = skipMap[i];
+                if (skipAddr != (i + 1)) {
+                  // logD("%d: post pop goto %d", i, skipAddr);
+                  compressedSequence.emplace_back(CODE_GOTO(skipAddr));
+                }
+                // decide if the immediate jump is a skip or take
+                bool skip = nextCodeAddr == skipAddr;
+                if (skip) {
+                  // logD("%d: skip jump @ %d to %d", i, lastSpanEnd, nextCodeAddr);
+                  jumpStream.emplace_back(CODE_SKIP(skip));
+                } else {
+                  // logD("%d: take jump @ %d to %d", i, lastSpanEnd, nextCodeAddr);
+                  jumpStream.emplace_back(CODE_JUMP(nextCodeAddr));  
+                }
                 size_t l = nextCodeAddr <= lastSpanEnd ? labelMap[nextCodeAddr] : compressedSequence.size();
                 labelFrequency[l]++;
+
               } else if (nextCodeAddr != (i + 1)) {
+                // straight GOTO
+                // logD("%d: goto %d", i, nextCodeAddr);
                 compressedSequence.emplace_back(CODE_GOTO(nextCodeAddr));
                 size_t l = nextCodeAddr <= lastSpanEnd ? labelMap[nextCodeAddr] : compressedSequence.size();
                 labelFrequency[l]++;
+
               }
             } else {
               jumpStream.emplace_back(0);
@@ -1127,8 +1205,9 @@ void DivExportAtari2600::writeTrackDataTIAZip(
         AlphaCode c = compressedSequence[i];
         CODE_TYPE type = GET_CODE_TYPE(c);
         if (type == CODE_TYPE::POP) {
-          AlphaCode codeJump = *it;
-          if (codeJump == 0) {
+          AlphaCode codeJump = *it++;
+          CODE_TYPE jumpType = GET_CODE_TYPE(codeJump);
+          if (jumpType == CODE_TYPE::POP) {
             AlphaCode x = codeSequences[subsong][channel][j];
             if (c != x) {
               logD("%d: %08x = %08x (%d)", i, c, x, j);
@@ -1136,11 +1215,13 @@ void DivExportAtari2600::writeTrackDataTIAZip(
               assert(false);
             }
             break;
+          } else if (jumpType == CODE_TYPE::SKIP) {
+            i++;
+          } else {
+            size_t nextJumpAddress = GET_CODE_ADDRESS(codeJump);
+            size_t l = labelMap[nextJumpAddress];
+            i = l;
           }
-          size_t nextJumpAddress = GET_CODE_ADDRESS(codeJump);
-          size_t l = labelMap[nextJumpAddress];
-          it++;
-          i = l;
         } else if (type == CODE_TYPE::GOTO) {
           // GOTO
           size_t nextJumpAddress = GET_CODE_ADDRESS(c);
@@ -1163,7 +1244,11 @@ void DivExportAtari2600::writeTrackDataTIAZip(
       // transform back to bytes
       trackData->writeText(fmt::sprintf("\nSPANS_S%d_C%d_START\n", subsong, channel));
       size_t labelAddress = 0;
+      size_t channelCompressedBytes = 0;
+      std::map<AlphaCode, size_t> compressedFrequencyMap;
+      std::map<AlphaCode, size_t> compressedByteFrequencyMap;
       for (auto c: compressedSequence) {
+        compressedFrequencyMap[c]++;
         if (labelFrequency.find(labelAddress) != labelFrequency.end()) {
           // if someone jumps here put down a label
           // BUGBUG: should only happen for literals or the last POP
@@ -1173,53 +1258,90 @@ void DivExportAtari2600::writeTrackDataTIAZip(
         switch (type) {
           case CODE_TYPE::POP:
             trackData->writeText(fmt::sprintf("    byte 0;\n"));
-            totalCompressedBytes++;
+            channelCompressedBytes++;
+            compressedByteFrequencyMap[0]++;
             break;
 
-          case CODE_TYPE::LITERAL:
+          case CODE_TYPE::LITERAL: {
             // emit literals
-            {
-              size_t len = GET_CODE_SIZE(c);
-              trackData->writeText("    byte ");
-              for (size_t i = 0; i < len; i++) {
-                unsigned char uc = GET_CODE_BYTE(c, i);
-                if (i > 0) {
-                  trackData->writeText(fmt::sprintf(", $%02x", uc));
-                } else {
-                  trackData->writeText(fmt::sprintf("$%02x", uc));
-                }                
-                totalCompressedBytes++;
-              }
-              trackData->writeText("\n");
+            size_t len = GET_CODE_SIZE(c);
+            trackData->writeText("    byte ");
+            for (size_t i = 0; i < len; i++) {
+              unsigned char uc = GET_CODE_BYTE(c, i);
+              if (i > 0) {
+                trackData->writeText(fmt::sprintf(", $%02x", uc));
+              } else {
+                trackData->writeText(fmt::sprintf("$%02x", uc));
+              }                
+              compressedByteFrequencyMap[uc]++;
+              channelCompressedBytes++;
             }
+            trackData->writeText("\n");
             break;
+          }
+
+          case CODE_TYPE::GOTO: {
+            // emit a jump
+            size_t nextJumpAddress = GET_CODE_ADDRESS(c);
+            size_t l = labelMap[nextJumpAddress];
+            String label = fmt::sprintf("_SPAN_S%d_C%d_%d", subsong, channel, l);
+            trackData->writeText(fmt::sprintf("    byte (>%s & $1f) << 3, <%s; GOTO %d\n", label, label, nextJumpAddress));
+            compressedByteFrequencyMap[nextJumpAddress >> 8]++;
+            compressedByteFrequencyMap[nextJumpAddress & 0xff]++;
+            channelCompressedBytes += 2;
+            break;
+          }
 
           case CODE_TYPE::JUMP:
-          case CODE_TYPE::GOTO:
-            // emit a jump
-            {
-              size_t nextJumpAddress = GET_CODE_ADDRESS(c);
-              size_t l = labelMap[nextJumpAddress];
-              String label = fmt::sprintf("_SPAN_S%d_C%d_%d", subsong, channel, l);
-              trackData->writeText(fmt::sprintf("    byte (>%s & $1f) << 3, <%s; GOTO %d\n", label, label, nextJumpAddress));
-              totalCompressedBytes += 2;
-            }
+          case CODE_TYPE::SKIP:
+            // should not exist in data stream
+            assert(false);
             break;
 
         }
         labelAddress++;
       }
+      totalCompressedBytes += channelCompressedBytes;
+
+      logD("compressed sequence length: %d", compressedSequence.size());
+      logD("compressed sequence bytes: %d", channelCompressedBytes);
+      logD("compressed dictionary size: %d", compressedFrequencyMap.size());
+      SHOW_FREQUENCIES(compressedFrequencyMap);
+      CALC_ENTROPY(compressedFrequencyMap);
+      logD("compressed bytes dictionary size: %d", compressedByteFrequencyMap.size());
+      SHOW_FREQUENCIES(compressedByteFrequencyMap);
+      CALC_ENTROPY(compressedByteFrequencyMap);
 
       trackData->writeText(fmt::sprintf("\nJUMPS_S%d_C%d_START\n", subsong, channel));
-      for (auto j: jumpStream) {
-        if (j == 0) {
-          trackData->writeText("    byte 0;");
-          continue;
+      for (auto c: jumpStream) {
+        CODE_TYPE type = GET_CODE_TYPE(c);
+        switch (type) {
+          case CODE_TYPE::POP:
+            trackData->writeText("    byte 0;\n");
+            break;
+
+          case CODE_TYPE::SKIP: {
+            bool skip = GET_CODE_SKIP(c);
+            if (skip) {
+              trackData->writeText("    byte $80;\n");
+            }
+            break;
+          }
+
+          case CODE_TYPE::JUMP: {
+            size_t nextJumpAddress = GET_CODE_ADDRESS(c);
+            size_t l = labelMap[nextJumpAddress];
+            String label = fmt::sprintf("_SPAN_S%d_C%d_%d", subsong, channel, l);
+            trackData->writeText(fmt::sprintf("    byte (>%s & $1f), <%s; JUMP %d\n", label, label, nextJumpAddress));
+            break;
+          }
+
+          case CODE_TYPE::LITERAL:
+          case CODE_TYPE::GOTO:
+            // should not exist in jump stream
+            assert(false);
+            break;
         }
-        size_t nextJumpAddress = GET_CODE_ADDRESS(j);
-        size_t l = labelMap[nextJumpAddress];
-        String label = fmt::sprintf("_SPAN_S%d_C%d_%d", subsong, channel, l);
-        trackData->writeText(fmt::sprintf("    byte >%s, <%s; JUMP %d\n", label, label, nextJumpAddress));
       }
 
       totalCompressedCodes += compressedSequence.size();
@@ -1231,7 +1353,7 @@ void DivExportAtari2600::writeTrackDataTIAZip(
     }
   }
 
-  trackData->writeText(fmt::sprintf("; Song data size: %d\n", songDataSize));
+  trackData->writeText(fmt::sprintf("\n\n; Song data size: %d\n", songDataSize));
   trackData->writeText(fmt::sprintf("; Uncompressed Sequence Length: %d\n", totalUncompressedCodes));
   trackData->writeText(fmt::sprintf("; Uncompressed Bytes: %d\n", totalUncompressedBytes));
   trackData->writeText(fmt::sprintf("; Number of Spans %d\n", totalSpans));
@@ -1240,7 +1362,7 @@ void DivExportAtari2600::writeTrackDataTIAZip(
   trackData->writeText(fmt::sprintf("; Compressed Bytes %d\n", totalCompressedBytes));
 
   ret.push_back(DivROMExportOutput("Track_data.asm", trackData));
-
+  
 }
 
 /**

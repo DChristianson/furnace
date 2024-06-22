@@ -172,7 +172,12 @@ bool compareStart(SuffixTree * a, SuffixTree * b) {
   return a->start < b->start;
 }
 
-bool compareFrequency(std::pair<AlphaCode, size_t> &a, std::pair<AlphaCode, size_t> &b) {
+bool compareCodeFrequency(std::pair<AlphaCode, size_t> &a, std::pair<AlphaCode, size_t> &b) {
+  if (a.second != b.second) return a.second > b.second;
+  return a.first < b.first;
+}
+
+bool compareIndexFrequency(std::pair<size_t, size_t> &a, std::pair<size_t, size_t> &b) {
   if (a.second != b.second) return a.second > b.second;
   return a.first < b.first;
 }
@@ -187,7 +192,7 @@ void createAlphabet(
   index.emplace(0, 0);
   alphabet.emplace_back(0);
   std::vector<std::pair<AlphaCode, size_t>> codes(frequencyMap.begin(), frequencyMap.end());
-  std::sort(codes.begin(), codes.end(), compareFrequency);
+  std::sort(codes.begin(), codes.end(), compareCodeFrequency);
   for (auto x : codes) {
     if (0 == x.first) {
       continue;
