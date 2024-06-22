@@ -26,7 +26,8 @@ typedef uint64_t AlphaCode;
 typedef uint64_t SpanCode;
 typedef int AlphaChar;
 
-bool compareFrequency(std::pair<AlphaCode, size_t> &a, std::pair<AlphaCode, size_t> &b);
+bool compareCodeFrequency(std::pair<AlphaCode, size_t> &a, std::pair<AlphaCode, size_t> &b);
+bool compareIndexFrequency(std::pair<size_t, size_t> &a, std::pair<size_t, size_t> &b);
 
 struct Span {
 

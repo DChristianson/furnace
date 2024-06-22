@@ -117,12 +117,17 @@ _audio_pop
             ; pull an address from jump stream
             lda (audio_track_ptr,x)
             beq audio_play_track ; restart song
+            bmi _audio_skip
             sta audio_data_ptr+1,x
             jsr audio_track_advance
             lda (audio_track_ptr,x)
             sta audio_data_ptr,x
+_audio_track_return
             jsr audio_track_advance
             jmp _audio_next_note
+_audio_skip
+            jsr audio_data_advance
+            jmp _audio_track_return        
 
 _audio_goto 
             ; pull an address from data stream
