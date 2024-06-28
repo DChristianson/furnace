@@ -111,7 +111,13 @@ class DivExportAtari2600 : public DivROMExport {
     std::vector<DivROMExportOutput> &ret
   );
 
-  size_t encodeChannelState(const ChannelState& next, const char duration, const ChannelState& last, std::vector<unsigned char> &out);
+  int encodeChannelState(
+    const ChannelState& next,
+    const char duration,
+    const ChannelState& last,
+    bool encodeRemainder,
+    std::vector<unsigned char> &out
+  );
 
 public:
 
