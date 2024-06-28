@@ -218,19 +218,7 @@ void translateString(
 // debugging code
 void testCommonSubsequences(const String &input);
 
-
 void testCV(const String &input);
 
-
-void encodeCopySequence(
-  const std::vector<AlphaCode> &sequence, 
-  const Span &bounds,
-  const std::vector<Span> &copySequence,
-  std::vector<AlphaCode> &encodedSequence);
-
-void encodeDeltaSequence(
-  const std::vector<AlphaCode> &sequence, 
-  const Span &bounds,
-  std::vector<AlphaCode> &encodedSequence);
 
 #endif // _SUFFIXTREE_H
