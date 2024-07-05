@@ -119,12 +119,31 @@ class DivExportAtari2600 : public DivROMExport {
     std::vector<unsigned char> &out
   );
 
-  size_t encodeCommandAlphabet(
+  size_t encodeChannelStateCodes(
     const ChannelState& next,
     const char duration,
     const ChannelState& last,
     std::vector<AlphaCode> &out
   );
+
+  void compressCodeSequence(
+    int subsong,
+    int channel,
+    const std::vector<AlphaCode> &alphabet,
+    const std::map<AlphaCode, AlphaChar> &index,
+    const std::vector<AlphaCode>&codeSequence,
+    std::vector<AlphaCode> &compressedCodeSequence,
+    std::vector<AlphaCode> &jumpSequence
+  );
+
+  void validateCodeSequence(
+    int subsong,
+    int channel,
+    const std::vector<AlphaCode>&codeSequence,
+    const std::vector<AlphaCode> &compressedCodeSequence,
+    const std::vector<AlphaCode> &jumpSequence
+  );
+
 
 public:
 
