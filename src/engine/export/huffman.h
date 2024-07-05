@@ -63,7 +63,11 @@ public:
 
   void writeBit(bool bit);
 
-  void writeByte(unsigned char);
+  size_t writeBits(const std::vector<bool> &bits);
+
+  void writeBits(unsigned char byte, unsigned char bits);
+
+  void writeByte(unsigned char byte);
 
   void seek(size_t index) {
     pos = index;
@@ -139,6 +143,6 @@ class CompareHuffmanTreeWeights {
 
 };
 
-HuffmanTree *buildHuffmanTree(const std::map<AlphaCode, size_t> &frequencyMap, size_t limit, AlphaCode literal);
+HuffmanTree *buildHuffmanTree(const std::map<AlphaCode, size_t> &frequencyMap, size_t limit, size_t minWeight, AlphaCode literal);
 
 #endif // _HUFFMAN_H

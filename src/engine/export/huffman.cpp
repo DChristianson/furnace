@@ -57,21 +57,32 @@ void Bitstream::writeBit(bool bit) {
   }
 }
 
+size_t Bitstream::writeBits(const std::vector<bool> &bits) {
+  for (int i = bits.size(); --i >= 0; ) {
+    writeBit(bits[i]);
+  }
+  return bits.size();
+}
+
 void Bitstream::writeByte(unsigned char byte) {
-  unsigned char mask = 0x80;
+  writeBits(byte, 8);
+}
+
+void Bitstream::writeBits(unsigned char byte, unsigned char bits) {
+  unsigned char mask = 1 << (bits - 1);
   while (mask > 0) {
     writeBit(byte & mask > 0);
     mask = mask >> 1;
   }
 }
 
-HuffmanTree *buildHuffmanTree(const std::map<AlphaCode, size_t> &frequencyMap, size_t limit, AlphaCode literal) {
+HuffmanTree *buildHuffmanTree(const std::map<AlphaCode, size_t> &frequencyMap, size_t limit, size_t minWeight, AlphaCode literal) {
 
     std::priority_queue<HuffmanTree *, std::vector<HuffmanTree *>, CompareHuffmanTreeWeights> heap;
 
     size_t literal_weight = 0;
     for (auto &x:frequencyMap) {
-      if (x.second == 1) {
+      if (x.second < minWeight) {
         literal_weight += 1;
         continue;
       }

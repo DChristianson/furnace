@@ -22,7 +22,7 @@
 
 #include "../engine.h"
 #include "registerDump.h"
-
+#include "suffixTree.h"
 
 enum DivExportTIAType {
   DIV_EXPORT_TIA_RAW,       // raw data export - no driver support 
@@ -117,6 +117,13 @@ class DivExportAtari2600 : public DivROMExport {
     const ChannelState& last,
     bool encodeRemainder,
     std::vector<unsigned char> &out
+  );
+
+  size_t encodeCommandAlphabet(
+    const ChannelState& next,
+    const char duration,
+    const ChannelState& last,
+    std::vector<AlphaCode> &out
   );
 
 public:
