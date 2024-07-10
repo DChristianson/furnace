@@ -33,7 +33,7 @@ private:
 
 public:
 
-  Bitstream(size_t capacity) : capacity(capacity) {
+  Bitstream(size_t capacity) : capacity(capacity), pos(0), endPos(0) {
     logD("new bitstream %d", capacity);
     size_t elements = capacity / 64;
     if (capacity % 64 > 0) {
@@ -55,9 +55,26 @@ public:
     return pos < endPos;
   }
 
+  size_t position() const {
+    return pos;
+  }
   size_t size() const {
     return endPos;
   }
+
+  size_t bytesUsed() const {
+    if (endPos % 8 > 0) {
+      return (endPos / 8) + 1;
+    } else {
+      return endPos / 8;
+    }
+  }
+
+  uint64_t inspect(size_t i) {
+    return buffer[i];
+  }
+
+  size_t readBits(unsigned char bits);
 
   bool readBit();
 
@@ -65,9 +82,7 @@ public:
 
   size_t writeBits(const std::vector<bool> &bits);
 
-  void writeBits(unsigned char byte, unsigned char bits);
-
-  void writeByte(unsigned char byte);
+  void writeBits(size_t value, unsigned char bits);
 
   void seek(size_t index) {
     pos = index;
@@ -117,6 +132,15 @@ struct HuffmanTree {
 
   bool isLeaf() {
     return left == NULL && right == NULL;
+  }
+
+  AlphaCode decode(Bitstream *bitstream) {
+    HuffmanTree *current = this;
+    while (!current->isLeaf()) {
+      bool isLeft = bitstream->readBit();
+      current = isLeft ? current->left : current->right;
+    }
+    return current->code;
   }
 
   void writePath(std::vector<bool> &path) {

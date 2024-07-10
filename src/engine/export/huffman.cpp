@@ -35,8 +35,9 @@ unsigned char Bitstream::readByte() {
 }
 
 bool Bitstream::readBit() {
-  uint64_t mask = 1 << (pos % 64);
-  size_t address = pos >> 64;
+  size_t s = pos % 64;
+  size_t address = pos >> 6;
+  uint64_t mask = ((uint64_t)1) << s;
   pos++;
   return buffer[address] & mask;
 }
@@ -45,7 +46,7 @@ void Bitstream::writeBit(bool bit) {
   assert(pos < capacity);
   size_t s = pos % 64;
   size_t address = pos >> 6;
-  uint64_t mask = 1 << s;
+  uint64_t mask = ((uint64_t)1) << s;
   if (bit) {
     buffer[address] = buffer[address] | mask;
   } else {
@@ -64,14 +65,20 @@ size_t Bitstream::writeBits(const std::vector<bool> &bits) {
   return bits.size();
 }
 
-void Bitstream::writeByte(unsigned char byte) {
-  writeBits(byte, 8);
+size_t Bitstream::readBits(unsigned char bits) {
+  size_t value = 0;
+  while (bits != 0) {
+    value = value << 1;
+    value |= readBit() ? 1 : 0;
+    bits--;
+  }
+  return value;
 }
 
-void Bitstream::writeBits(unsigned char byte, unsigned char bits) {
-  unsigned char mask = 1 << (bits - 1);
+void Bitstream::writeBits(size_t value, unsigned char bits) {
+  uint64_t mask = ((uint64_t) 1) << (bits - 1);
   while (mask > 0) {
-    writeBit(byte & mask > 0);
+    writeBit((value & mask) > 0);
     mask = mask >> 1;
   }
 }
