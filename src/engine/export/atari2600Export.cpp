@@ -59,6 +59,7 @@ const int AUDV1 = 0x1A;
 //  - the good compression
 //    - figure out compression scheme name
 //    - produce actual bytecode output (can be messy)
+//    - successful decoder in assembly
 //    - encoding schemes
 //        - JUMP (on 0, check jump stream)
 //        - GOTO (on 0, check jump stream, on 0xf8 go straight to next)
@@ -80,7 +81,7 @@ const int AUDV1 = 0x1A;
 //              - DURATION  0-15
 //              - variable length for sustain bits
 //              - "next" volume +/- (bigrams?)
-//    - successful decoder in assembly
+//          - create test decoder
 //  - compression goals
 //    - Coconut... small in 4k
 //    - breakbeat in 4k
@@ -89,10 +90,9 @@ const int AUDV1 = 0x1A;
 //  - the good compression
 //    - encoding schemes
 //        - trial huffman code data stream
-//          - create test decoder
 //          - write 6502 decoder
-//          - try full instruction encode
-//          - try tiacomp comparison
+//          - more compression of jumps?
+//          - try simpler fixed coding?
 //        - trial instrument / waveform scheme
 //        - just use actual zip or 7z with augments?
 //          - need low memory 6502 decoder
@@ -107,6 +107,7 @@ const int AUDV1 = 0x1A;
 //        - w encoding bytes 3532 data / 629 jump = 4161
 //        - w encoding bytes + less bits for volume 3296 data / 675 jump = 3971
 //        - w more complex instruction set + RETURN  = 2936 data / 661 jump = 3596
+//        - w validated output = 2998 data / 771 jump = 3769
 //  - other output schemes
 //    - batari basic player
 //  - testability
@@ -1122,7 +1123,7 @@ void DivExportAtari2600::writeTrackDataTIAZip(
       codeSequences,
       compressedCodeSequences,
       jumpSequences,
-      0xf300,
+      0x0300,
       4096 * 8,
       ret
     );
@@ -1133,7 +1134,7 @@ void DivExportAtari2600::writeTrackDataTIAZip(
       codeSequences,
       compressedCodeSequences,
       jumpSequences,
-      0xf300,
+      0x0300,
       4096 * 8,
       ret
     );
@@ -1339,8 +1340,6 @@ void DivExportAtari2600::compressCodeSequence(
   // rewrite returns
   size_t returnToLastJumpAddress = 0;
   size_t returnToFrontOfStreamAddress = 0;
-  std::map<size_t, size_t> gotoLastFrequency;
-  std::map<size_t, size_t> gotoFixedFrequency;
   for (size_t i = 0, j = 0; i < compressedCodeSequence.size(); ) {
     AlphaCode c = compressedCodeSequence[i];
     CODE_TYPE type = GET_CODE_TYPE(c);
@@ -1389,11 +1388,6 @@ void DivExportAtari2600::compressCodeSequence(
     } else if (type == CODE_TYPE::JUMP) {
       // GOTO
       size_t jumpAddress = GET_CODE_ADDRESS(c);
-      if (jumpAddress == returnToLastJumpAddress) {
-        gotoLastFrequency[i]++;
-      } else {
-        gotoFixedFrequency[i]++;
-      }
       logD("keep goto %d at %d/%d ->%d ->%d", jumpAddress, i, j, returnToLastJumpAddress, returnToFrontOfStreamAddress);
       returnToLastJumpAddress = i + 1;
       if (returnToLastJumpAddress >= returnToFrontOfStreamAddress) {
@@ -1401,22 +1395,12 @@ void DivExportAtari2600::compressCodeSequence(
       }
       i = jumpAddress;
     } else if (type == CODE_TYPE::RETURN) {
-      if (c == CODE_RETURN_FRONT) {
-        i = returnToFrontOfStreamAddress;
-      } else {
-        i = returnToLastJumpAddress;
-      }
+      assert(false);
     } else {
       i++;
     }
   }
 
-  for (auto &x: gotoLastFrequency) {
-    if (gotoFixedFrequency.find(x.first) != gotoFixedFrequency.end()) {
-      continue;
-    }
-    logD("can swap goto for last at %d", x.first);
-  }
 }
 
 void DivExportAtari2600::encodeBitstreamFixed(
@@ -2042,19 +2026,17 @@ void DivExportAtari2600::encodeBitstreamDynamic(
         }
       }
 
-      logD("inspect start %d %d %08x", subsong, channel, dataStream->inspect(0));
       for (auto& x : dataStreamPointerMap) {
-        logD("rewriting  %016x / %016x as %016x in data stream", x.first, x.second, positionMap[x.second]);
         dataStream->seek(x.first);
         dataStream->writeBits(positionMap[x.second], 15);
+        dataStream->seek(x.first);
       }
 
       for (auto& x : jumpStreamPointerMap) {
-        logD("rewriting  %016x / %016x as %016x in jump stream", x.first, x.second, positionMap[x.second]);
         jumpStream->seek(x.first);
         jumpStream->writeBits(positionMap[x.second], 15);
+        jumpStream->seek(x.first);
       }
-      logD("inspect start %d %d %08x", subsong, channel, dataStream->inspect(0));
 
       for (auto& x : jumpMap) {
         if (subsong != GET_CODE_SUBSONG(x.first)) {
@@ -2065,7 +2047,6 @@ void DivExportAtari2600::encodeBitstreamDynamic(
         }
         size_t address = GET_CODE_ADDRESS(x.first);
         jumpAddresses[x.second] = positionMap[address];
-        logD("index mapping %d %d %d (%d) to %016x", subsong, channel, x.first, x.second, positionMap[address]);
       }
 
       streamDataOffset += (dataStream->bytesUsed() << 3);
@@ -2075,6 +2056,7 @@ void DivExportAtari2600::encodeBitstreamDynamic(
 
   // validate bitstream
   streamDataOffset = (dataOffset << 3);
+  std::map<AlphaCode, size_t> jumpDistanceMap;
   for (size_t subsong = 0; subsong < e->song.subsong.size(); subsong++) {
     for (int channel = 0; channel < 2; channel += 1) {
       auto &codeSequence = codeSequences[subsong][channel];
@@ -2117,6 +2099,8 @@ void DivExportAtari2600::encodeBitstreamDynamic(
               nextAddress = jumpAddresses[index];
             }
             nextAddress -= streamDataOffset;
+            long distance = ((long) nextAddress) - streamPosition;
+            jumpDistanceMap[distance > 0 ? distance : (((uint64_t)1) << 56) | -distance]++;
             lastPos = dataStream->position();
             if (maxPos < lastPos) {
               maxPos = lastPos;
@@ -2161,9 +2145,8 @@ void DivExportAtari2600::encodeBitstreamDynamic(
             }
             if (0 == nextAddress) {
               // POP
-              logD("POP");
               code = 0;
-              break; // BUGBUG: POP Out
+              break;
             }
             nextAddress -= streamDataOffset;
             lastPos = dataStream->position();
@@ -2184,11 +2167,19 @@ void DivExportAtari2600::encodeBitstreamDynamic(
         }
         assert(code == codeToCompare);
       }
-      logD("ss %d ch %d is valid at %d %d", subsong, channel, codeSequence.size(), dataStream->position());
+      logD("ss %d ch %d is valid at %d/%d %d", subsong, channel, i, codeSequence.size(), dataStream->position());
+      assert(i == codeSequence.size());
+      assert(!dataStream->hasBits());
+      assert(!jumpStream->hasBits());
+      logD("end of codes code %016x", codeSequence[codeSequence.back()]);
+      logD("end of compressed code %016x", compressedCodeSequences[subsong][channel].back());
+      logD("end of jumps code %016x", jumpSequences[subsong][channel].back());
 
       streamDataOffset += (dataStream->bytesUsed() << 3);
     }
   }
+
+  SHOW_FREQUENCIES(jumpDistanceMap);
 
   // write the audio track data
   size_t totalCompressedBytes = 0;
@@ -2272,8 +2263,6 @@ void DivExportAtari2600::validateCodeSequence(
   // uncompressedSequence.reserve(alphaSequence.size());
   auto it = jumpSequence.begin();
   size_t j = 0;
-  int depth = 0;
-  int maxDepth = 0;
   size_t maxOffset = 0;
   size_t returnAddress = 0;
   for (size_t i = 0; i < compressedCodeSequence.size(); ) {
@@ -2307,14 +2296,6 @@ void DivExportAtari2600::validateCodeSequence(
           } else {
             assert(GET_CODE_TYPE(codeJump) == CODE_TYPE::JUMP);
             size_t jumpAddress = GET_CODE_ADDRESS(codeJump);
-            if (jumpAddress < i) {
-              depth += 1;
-              if (depth > maxDepth) {
-                maxDepth = depth;
-              }
-            } else if (jumpAddress > i) {
-              depth -= 1;
-            }
             returnAddress = i + 1;
             if (returnAddress >= maxOffset) {
               maxOffset = returnAddress;
@@ -2331,14 +2312,6 @@ void DivExportAtari2600::validateCodeSequence(
     } else if (type == CODE_TYPE::JUMP) {
       // GOTO
       size_t jumpAddress = GET_CODE_ADDRESS(c);
-      if (jumpAddress < i) {
-        depth += 1;
-        if (depth > maxDepth) {
-          maxDepth = depth;
-        }
-      } else {
-        depth -= 1;
-      }
       returnAddress = i + 1;
       if (returnAddress >= maxOffset) {
         maxOffset = returnAddress;
@@ -2369,9 +2342,7 @@ void DivExportAtari2600::validateCodeSequence(
       j++;
     }
   } 
-  logD("max depth %d", maxDepth);
 }
-  
 
 /**
  *  Write note data. Format 0:
