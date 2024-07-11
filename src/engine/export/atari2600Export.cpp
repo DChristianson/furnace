@@ -895,8 +895,15 @@ const AlphaCode CODE_RETURN_LAST = ((AlphaCode) RETURN) << 56;
 const AlphaCode CODE_RETURN_FRONT = (((AlphaCode) RETURN) << 56) | 1;
 const AlphaCode CODE_ABSTRACT_PAUSE = ((AlphaCode) PAUSE) << 56;
 const AlphaCode CODE_ABSTRACT_SUSTAIN = ((AlphaCode) SUSTAIN) << 56;
-const AlphaCode CODE_ABSTRACT_WRITE = 0xffff00ff00ff0000; // BUGBUG: HACKY
 const AlphaCode CODE_ABSTRACT_JUMP = ((AlphaCode) ABSTRACT_JUMP) << 56;
+const AlphaCode CODE_ABSTRACT_WRITE  = 0xffff00ff00ff0000; // BUGBUG: HACKY
+const AlphaCode CODE_WRITE_DELTA_001 = 0x0100000000010000; // BUGBUG: HACKY
+const AlphaCode CODE_WRITE_DELTA_010 = 0x0100000100000000; // BUGBUG: HACKY
+const AlphaCode CODE_WRITE_DELTA_011 = 0x0100000100010000; // BUGBUG: HACKY
+const AlphaCode CODE_WRITE_DELTA_100 = 0x0101000000000000; // BUGBUG: HACKY
+const AlphaCode CODE_WRITE_DELTA_101 = 0x0101000000010000; // BUGBUG: HACKY
+const AlphaCode CODE_WRITE_DELTA_110 = 0x0101000100000000; // BUGBUG: HACKY
+const AlphaCode CODE_WRITE_DELTA_111 = 0x0101000100010000; // BUGBUG: HACKY
 
 // BUGBUG: make macro/inline
 AlphaCode CODE_JUMP(int subsong, int channel, size_t index) {
@@ -919,7 +926,7 @@ bool GET_CODE_SKIP(AlphaCode code) {
 }
 
 AlphaCode GET_CODE_ABSTRACT_DELTA(AlphaCode c) {
-  return 0xffff00ff00ff0000; // & c; BUGBUG trying one code
+  return CODE_ABSTRACT_WRITE & c; 
 }
 
 CHANGE_STATE GET_CODE_WRITE_CC(AlphaCode c) {
@@ -1356,21 +1363,16 @@ void DivExportAtari2600::compressCodeSequence(
         } else {
           jump = jumpSequence[j];
           if (jump == CODE_RETURN_LAST) {
-            logD("returning to last %d", returnToLastJumpAddress);
             i = returnToLastJumpAddress;
           } else if (jump == CODE_RETURN_FRONT) {
-            logD("returning to front %d", returnToFrontOfStreamAddress);
             i = returnToFrontOfStreamAddress;
           } else {
             size_t jumpAddress = GET_CODE_ADDRESS(jump);
             if (jumpAddress == returnToLastJumpAddress) {
-              logD("swap jump to %d for last at %d/%d", jumpAddress, i, j);
               jumpSequence[j] = CODE_RETURN_LAST;
             } else if (jumpAddress == returnToFrontOfStreamAddress) {
-              logD("swap jump to %d for front at %d/%d", jumpAddress, i, j);
               jumpSequence[j] = CODE_RETURN_FRONT;
             } else {
-              logD("keep jump %08x/%08x to %d at %d/%d ->%d ->%d", c, jump, jumpAddress, i, j, returnToLastJumpAddress, returnToFrontOfStreamAddress);
               returnToLastJumpAddress = i + 1;
               if (returnToLastJumpAddress >= returnToFrontOfStreamAddress) {
                 returnToFrontOfStreamAddress = returnToLastJumpAddress;
@@ -1388,7 +1390,6 @@ void DivExportAtari2600::compressCodeSequence(
     } else if (type == CODE_TYPE::JUMP) {
       // GOTO
       size_t jumpAddress = GET_CODE_ADDRESS(c);
-      logD("keep goto %d at %d/%d ->%d ->%d", jumpAddress, i, j, returnToLastJumpAddress, returnToFrontOfStreamAddress);
       returnToLastJumpAddress = i + 1;
       if (returnToLastJumpAddress >= returnToFrontOfStreamAddress) {
         returnToFrontOfStreamAddress = returnToLastJumpAddress;
@@ -1799,16 +1800,23 @@ void DivExportAtari2600::encodeBitstreamDynamic(
           durationFrequencyMap[(AlphaCode)duration]++;
 
         } else {
-          abstractFrequencyMap[GET_CODE_ABSTRACT_DELTA(c)]++;
+          AlphaCode ac = GET_CODE_ABSTRACT_DELTA(c); 
+          abstractFrequencyMap[ac]++;
           CHANGE_STATE cc = GET_CODE_WRITE_CC(c);
-          unsigned char cx = GET_CODE_WRITE_CX(c);
-          controlFrequencyMap[ (cc << 8) | cx]++;
+          if (cc == CHANGE_STATE::WRITE) {
+            unsigned char cx = GET_CODE_WRITE_CX(c);
+            controlFrequencyMap[ (cc << 8) | cx]++;
+          }
           CHANGE_STATE fc = GET_CODE_WRITE_FC(c);
-          unsigned char fx = GET_CODE_WRITE_FX(c);
-          frequencyFrequencyMap[ (fc << 8) | fx]++;
+          if (fc == CHANGE_STATE::WRITE) {
+            unsigned char fx = GET_CODE_WRITE_FX(c);
+            frequencyFrequencyMap[ (fc << 8) | fx]++;
+          }
           CHANGE_STATE vc = GET_CODE_WRITE_VC(c);
-          unsigned char vx = GET_CODE_WRITE_VX(c);
-          volumeFrequencyMap[ (vc << 8) | vx]++;
+          if (vc == CHANGE_STATE::WRITE) {
+            unsigned char vx = GET_CODE_WRITE_VX(c);
+            volumeFrequencyMap[ (vc << 8) | vx]++;
+          }
           unsigned char duration = GET_CODE_WRITE_DURATION(c);
           assert(duration == 1);
           // BUGBUG: testing
@@ -1939,14 +1947,20 @@ void DivExportAtari2600::encodeBitstreamDynamic(
               AlphaCode ac = GET_CODE_ABSTRACT_DELTA(c); 
               dataStream->writeBits(abstractCodeIndex.at(ac));
               CHANGE_STATE cc = GET_CODE_WRITE_CC(c);
-              unsigned char cx = GET_CODE_WRITE_CX(c);
-              dataStream->writeBits(controlCodeIndex.at((cc << 8) | cx));
+              if (cc == CHANGE_STATE::WRITE) {
+                unsigned char cx = GET_CODE_WRITE_CX(c);
+                dataStream->writeBits(controlCodeIndex.at((cc << 8) | cx));
+              }
               CHANGE_STATE fc = GET_CODE_WRITE_FC(c);
-              unsigned char fx = GET_CODE_WRITE_FX(c);
-              dataStream->writeBits(frequencyCodeIndex.at((fc << 8) | fx));
+              if (fc == CHANGE_STATE::WRITE) {
+                unsigned char fx = GET_CODE_WRITE_FX(c);
+                dataStream->writeBits(fx, 5);
+              }
               CHANGE_STATE vc = GET_CODE_WRITE_VC(c);
-              unsigned char vx = GET_CODE_WRITE_VX(c);
-              dataStream->writeBits(volumeCodeIndex.at((vc << 8) | vx));
+              if (vc == CHANGE_STATE::WRITE) {
+                unsigned char vx = GET_CODE_WRITE_VX(c);
+                dataStream->writeBits(volumeCodeIndex.at((vc << 8) | vx));
+              }
               // duration is always 1
               // unsigned char duration = GET_CODE_WRITE_DURATION(c);
               // dataStream->writeBits(durationCodeIndex.at(duration));
@@ -2072,14 +2086,16 @@ void DivExportAtari2600::encodeBitstreamDynamic(
         AlphaCode code;
         AlphaCode nextCommand = abstractCodeTree->decode(dataStream);
         switch (nextCommand) {
-          case CODE_ABSTRACT_WRITE: {
+          case CODE_WRITE_DELTA_111: {
             AlphaCode control = controlTree->decode(dataStream);
             CHANGE_STATE cc = (CHANGE_STATE) (control >> 8);
             unsigned char cx = control & 0x0f;
 
-            AlphaCode frequency = frequencyTree->decode(dataStream);
-            CHANGE_STATE fc = (CHANGE_STATE) (frequency >> 8);
-            unsigned char fx = frequency & 0x1f;
+            // AlphaCode frequency = frequencyTree->decode(dataStream);
+            // CHANGE_STATE fc = (CHANGE_STATE) (frequency >> 8);
+            // unsigned char fx = frequency & 0x1f;
+            CHANGE_STATE fc = CHANGE_STATE::WRITE;
+            unsigned char fx = dataStream->readBits(5);
 
             AlphaCode volume = volumeTree->decode(dataStream);
             CHANGE_STATE vc = (CHANGE_STATE) (volume >> 8);
@@ -2088,7 +2104,45 @@ void DivExportAtari2600::encodeBitstreamDynamic(
             code = CODE_WRITE_DELTA(cc, cx, fc, fx, vc, vx, 1);
             break;
           }
-        
+
+          case CODE_WRITE_DELTA_011: {
+
+            // AlphaCode frequency = frequencyTree->decode(dataStream);
+            // CHANGE_STATE fc = (CHANGE_STATE) (frequency >> 8);
+            // unsigned char fx = frequency & 0x1f;
+            CHANGE_STATE fc = CHANGE_STATE::WRITE;
+            unsigned char fx = dataStream->readBits(5);
+
+            AlphaCode volume = volumeTree->decode(dataStream);
+            CHANGE_STATE vc = (CHANGE_STATE) (volume >> 8);
+            unsigned char vx = volume & 0xff;
+
+            code = CODE_WRITE_DELTA(CHANGE_STATE::NOOP, 0, fc, fx, vc, vx, 1);
+            break;
+          }
+
+          case CODE_WRITE_DELTA_001: {
+
+            AlphaCode volume = volumeTree->decode(dataStream);
+            CHANGE_STATE vc = (CHANGE_STATE) (volume >> 8);
+            unsigned char vx = volume & 0xff;
+
+            code = CODE_WRITE_DELTA(CHANGE_STATE::NOOP, 0, CHANGE_STATE::NOOP, 0, vc, vx, 1);
+            break;
+          }
+
+          case CODE_WRITE_DELTA_010: {
+
+            // AlphaCode frequency = frequencyTree->decode(dataStream);
+            // CHANGE_STATE fc = (CHANGE_STATE) (frequency >> 8);
+            // unsigned char fx = frequency & 0x1f;
+            CHANGE_STATE fc = CHANGE_STATE::WRITE;
+            unsigned char fx = dataStream->readBits(5);
+
+            code = CODE_WRITE_DELTA(CHANGE_STATE::NOOP, 0, fc, fx, CHANGE_STATE::NOOP, 0, 1);
+            break;
+          }
+
           case CODE_ABSTRACT_JUMP: {
             size_t nextAddress;
             bool isAddress = dataStream->readBit();
@@ -2498,11 +2552,16 @@ size_t DivExportAtari2600::encodeChannelStateCodes(
   unsigned char dx = 1; //framecount > 2 ? 2 : framecount;
   framecount = framecount - dx;
 
+  // BUGBUG: this is also important, seldom make control changes by themselves
+  if (cc > 0) {
+    fc = vc = CHANGE_STATE::WRITE;
+  };
+
   size_t codesWritten = 0;
   if (audvx == 0) {
     out.emplace_back(CODE_PAUSE(dx));
     codesWritten++;
-  } else {
+  } else if (cc + fc + vc > 0) {
     out.emplace_back(CODE_WRITE_DELTA(
       cc,
       cc == CHANGE_STATE::NOOP ? 0 : audcx,
@@ -2516,7 +2575,7 @@ size_t DivExportAtari2600::encodeChannelStateCodes(
   }
 
   while (framecount > 0) {
-    unsigned char dx = framecount > 8 ? 8 : framecount;
+    unsigned char dx = framecount > 32 ? 32 : framecount;
     framecount = framecount - dx;
     out.emplace_back(CODE_SUSTAIN(dx));
     codesWritten++;
