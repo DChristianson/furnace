@@ -729,7 +729,6 @@ src/engine/wavetable.cpp
 src/engine/waveSynth.cpp
 src/engine/wavOps.cpp
 src/engine/vgmOps.cpp
-src/engine/zsmOps.cpp
 src/engine/zsm.cpp
 src/engine/export/atari2600Export.cpp
 src/engine/export/registerDump.cpp
