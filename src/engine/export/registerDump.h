@@ -140,10 +140,11 @@ struct ChannelStateInterval {
 
   ChannelState state;
   int duration;
+  RowIndex row; // index for tracing purposes
 
-  ChannelStateInterval(const ChannelStateInterval &other) : state(other.state), duration(other.duration) {}
+  ChannelStateInterval(const ChannelStateInterval &other) : state(other.state), duration(other.duration), row(other.row) {}
 
-  ChannelStateInterval(const ChannelState &state, int duration) : state(state), duration(duration) {}
+  ChannelStateInterval(const ChannelState &state, const int duration, const RowIndex &row) : state(state), duration(duration), row(row) {}
 
   ChannelStateInterval& operator=(const ChannelStateInterval& other) {
     state = other.state;
@@ -172,17 +173,18 @@ struct ChannelStateSequence {
   ChannelStateSequence(const ChannelState &initialState, int maxIntervalDuration) 
     : initialState(initialState), maxIntervalDuration(maxIntervalDuration) {}
 
-  void updateState(const ChannelState &state) {
+  void updateState(const ChannelState &state, const RowIndex &row) {
     if (intervals.size() > 0 && intervals.back().state.equals(state)) {
       // ignore state update if it represents no change
       return;
     }
-    intervals.emplace_back(ChannelStateInterval(state, 0));
+    intervals.emplace_back(ChannelStateInterval(state, 0, row));
   }
 
-  int addDuration(const int ticks, const int remainder, const int freq) {
+
+  int addDuration(const int ticks, const int remainder, const int freq, const RowIndex &row) {
     if (intervals.size() == 0) {
-      intervals.emplace_back(ChannelStateInterval(ChannelState(0), 0));
+      intervals.emplace_back(ChannelStateInterval(ChannelState(0), 0, row));
     }
     ChannelStateInterval &lastInterval = intervals.back();
     int total = ticks + remainder;
@@ -191,7 +193,7 @@ struct ChannelStateSequence {
     if (nextDuration > maxIntervalDuration) {
       lastInterval.duration = maxIntervalDuration;
       nextDuration = nextDuration - maxIntervalDuration;
-      intervals.emplace_back(ChannelStateInterval(lastInterval.state, nextDuration));
+      intervals.emplace_back(ChannelStateInterval(lastInterval.state, nextDuration, lastInterval.row));
     } else {
       lastInterval.duration = nextDuration;
     }    

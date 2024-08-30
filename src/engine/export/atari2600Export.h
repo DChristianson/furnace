@@ -134,30 +134,14 @@ class DivExportAtari2600 : public DivROMExport {
     const std::map<AlphaCode, AlphaChar> &index,
     const std::vector<AlphaCode>&codeSequence,
     std::vector<AlphaCode> &compressedCodeSequence,
-    std::vector<AlphaCode> &jumpSequence
+    std::vector<AlphaCode> &spanSequence
   );
-
-  /**
-   * Encode compressed sequence with fixed coding scheme
-   */
-  void encodeBitstreamFixed(
-    DivEngine* e, 
-    const std::vector<AlphaCode> (*codeSequences)[2],
-    const std::vector<AlphaCode> (*compressedCodeSequences)[2],
-    const std::vector<AlphaCode> (*jumpSequences)[2],
-    size_t dataOffset,
-    size_t blockSize,
-    std::vector<DivROMExportOutput> &ret
-  );
-
-  /**
-   * Encode compressed sequence with dynamic coding scheme
-   */
+  
   void encodeBitstreamDynamic(
     DivEngine* e, 
     const std::vector<AlphaCode> (*codeSequences)[2],
     const std::vector<AlphaCode> (*compressedCodeSequences)[2],
-    const std::vector<AlphaCode> (*jumpSequences)[2],
+    const std::vector<AlphaCode> (*spanSequences)[2],
     size_t dataOffset,
     size_t blockSize,
     std::vector<DivROMExportOutput> &ret
@@ -168,7 +152,7 @@ class DivExportAtari2600 : public DivROMExport {
     int channel,
     const std::vector<AlphaCode>&codeSequence,
     const std::vector<AlphaCode> &compressedCodeSequence,
-    const std::vector<AlphaCode> &jumpSequence
+    const std::vector<AlphaCode> &spanSequence
   );
 
 public:

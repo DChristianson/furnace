@@ -48,7 +48,7 @@ def parse_stella_log(fp):
 
 # Parse RegisterWrites data
 # ; 562 T9.382958 F563.0: SS0 ORD4 ROW23 SYS0> 23 = 31
-re_regwrites = re.compile(r'^; (?P<write_index>\d+) T(?P<ticks>[0-9.]+) F(?P<frame_partial>[0-9.]+): (?P<rowid>SS\d+ ORD\d+ ROW\d+ SYS\d+)> (?P<address>\d+) = (?P<value>\d+)$')
+re_regwrites = re.compile(r'^; (?P<write_index>\d+) T(?P<ticks>[0-9.]+) H(?P<hz>[0-9.]+) F(?P<frame_partial>[0-9.]+): (?P<rowid>SS\d+ ORD\d+ ROW\d+ SYS\d+)> (?P<address>\d+) = (?P<value>\d+)$')
 def parse_regwrite(fp):
     for line in fp:
         m = re_regwrites.match(line)
