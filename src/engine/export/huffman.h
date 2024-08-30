@@ -80,6 +80,8 @@ public:
 
   void writeBit(bool bit);
 
+  size_t padByteBoundary();
+
   size_t writeBits(const std::vector<bool> &bits);
 
   void writeBits(size_t value, unsigned char bits);

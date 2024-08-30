@@ -58,6 +58,18 @@ void Bitstream::writeBit(bool bit) {
   }
 }
 
+size_t Bitstream::padByteBoundary() {
+    size_t s = pos % 8;
+    if (s > 0) {
+      s = 8 - s;
+      pos += s;
+    }
+    if (pos > endPos) {
+     endPos = pos;
+    }
+    return s;
+}
+
 size_t Bitstream::writeBits(const std::vector<bool> &bits) {
   for (int i = bits.size(); --i >= 0; ) {
     writeBit(bits[i]);
@@ -76,6 +88,7 @@ size_t Bitstream::readBits(unsigned char bits) {
 }
 
 void Bitstream::writeBits(size_t value, unsigned char bits) {
+  if (0 == bits) return;
   uint64_t mask = ((uint64_t) 1) << (bits - 1);
   while (mask > 0) {
     writeBit((value & mask) > 0);

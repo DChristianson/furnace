@@ -434,9 +434,12 @@ sub_freq_slice
 ;-----------------------------------------------------------------------------------
 ; Graphics
 
-    ORG $FF80
 
+    ORG $FF00
+    
     #include "Track_meta.asm"
+
+    ORG $FF80
 
 VIS_FREQ_PF0
     byte %10101010

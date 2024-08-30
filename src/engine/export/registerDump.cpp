@@ -33,6 +33,7 @@ void registerDump(
   e->setOrder(0);
   e->play();
   long nextTickCount = -1;
+  RowIndex curRowIndex(subsong, 0, 0);
   bool done=false;
   std::map<int, int> currentRegisterValue;
   while (!done && e->isPlaying()) {
@@ -40,6 +41,25 @@ void registerDump(
     done = e->nextTick(false, true);
     nextTickCount += 1;
     if (done) break;
+
+    if (curRowIndex.advance(e->getCurrentSubSong(), e->getOrder(), e->getRow())) {
+      // write new row marker
+      writes.emplace_back(
+        RegisterWrite(
+        nextTickCount,
+        e->getCurrentSubSong(),
+        e->getOrder(),
+        e->getRow(),
+        -1,
+        DivSystem::DIV_SYSTEM_NULL,
+        e->getTotalSeconds(),
+        e->getTotalTicks(),
+        e->getCurHz(),
+        -1,
+        -1
+        )
+      );
+    }
 
     // get register writes
     for (int i=0; i<e->song.systemLen; i++) {
@@ -56,7 +76,7 @@ void registerDump(
             system,
             e->getTotalSeconds(),
             e->getTotalTicks(),
-            e->getHz(),
+            e->getCurHz(),
             registerWrite.addr,
             registerWrite.val
           )
@@ -81,6 +101,7 @@ void registerDump(
       -1
     )
   );
+
   for (int i=0; i<e->song.systemLen; i++) {
     e->getDispatch(i)->toggleRegisterDump(false);
   }
@@ -101,6 +122,8 @@ void writeChannelStateSequence(
   ChannelStateSequence &dumpSequence 
 ) {
 
+
+  RowIndex curRowIndex(subsong, 0, 0);
   long lastWriteIndex = -1;
   int lastWriteTicks = 0;
   int lastWriteSeconds = 0;
@@ -129,18 +152,20 @@ void writeChannelStateSequence(
             lastState.clear();
           }
         }
-        dumpSequence.updateState(lastState);
-        deltaTicksR = dumpSequence.addDuration(deltaTicks, deltaTicksR, freq);
+        dumpSequence.updateState(lastState, curRowIndex);
+        deltaTicksR = dumpSequence.addDuration(deltaTicks, deltaTicksR, freq, curRowIndex);
         deltaTicks = 0;
       }
       lastWriteIndex = currentWriteIndex;
       lastWriteTicks = currentTicks;
       lastWriteSeconds = currentSeconds;
     }
-
-    // stop if we reach the end marker
+    
+    curRowIndex.advance(write.rowIndex.subsong, write.rowIndex.ord, write.rowIndex.row);
+    
+    // skip markers
     if (write.systemIndex < 0) {
-      break;
+      continue;
     }
 
     // process write
@@ -199,18 +224,13 @@ void writeChannelStateSequenceByRow(
             lastState.clear();
           }
         }
-        currentDumpSequence->updateState(lastState);
-        deltaTicksR = currentDumpSequence->addDuration(deltaTicks, deltaTicksR, freq);
+        currentDumpSequence->updateState(lastState, curRowIndex);
+        deltaTicksR = currentDumpSequence->addDuration(deltaTicks, deltaTicksR, freq, curRowIndex);
       }
       deltaTicks = 0;
       lastWriteIndex = currentWriteIndex;
       lastWriteTicks = currentTicks;
       lastWriteSeconds = currentSeconds;
-    }
-
-    // stop if we reach the end marker
-    if (write.systemIndex < 0) {
-      break;
     }
 
     // check if we've changed rows
@@ -221,6 +241,11 @@ void writeChannelStateSequenceByRow(
       auto nextIt = registerDumps.emplace(key, ChannelStateSequence());
       ChannelStateSequence *nextDumpSequence = &(nextIt.first->second);
       currentDumpSequence = nextDumpSequence;
+    }
+
+    // don't process marker writes
+    if (write.systemIndex < 0) {
+      continue;
     }
 
     // process write
