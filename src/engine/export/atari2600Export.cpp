@@ -157,8 +157,10 @@ const char* TiaRegisterNames[] = {
   "AUDV1"
 };
 
-DivExportAtari2600::DivExportAtari2600(DivEngine *e) {
-  String exportTypeString = e->getConfString("romout.tiaExportType", "FSEQ");
+
+bool DivExportAtari2600::go(DivEngine* eng) {
+  e = eng;
+   String exportTypeString = conf.getString("romout.tiaExportType", "FSEQ");
   logD("retrieving config exportType [%s]", exportTypeString);
   // BUGBUG: cleanse and normalize
   if (exportTypeString == "RAW") {
@@ -174,11 +176,33 @@ DivExportAtari2600::DivExportAtari2600(DivEngine *e) {
   } else if (exportTypeString == "TIAZIP") {
     exportType = DIV_EXPORT_TIA_TIAZIP;
   }
-  debugRegisterDump = e->getConfBool("romout.debugOutput", false);
+  debugRegisterDump = conf.getBool("romout.debugOutput", false);
+  // BUGBUG: TODO: THREADS
+  run();
+  return true;
 }
 
-std::vector<DivROMExportOutput> DivExportAtari2600::go(DivEngine* e) {
-  std::vector<DivROMExportOutput> ret;
+void DivExportAtari2600::wait() {
+  // BUGBUG: TODO
+}
+
+void DivExportAtari2600::abort() {
+  // BUGBUG: TODO
+}
+
+bool DivExportAtari2600::isRunning() {
+  return true;
+}
+
+bool DivExportAtari2600::hasFailed() {
+  return false;
+}
+
+DivROMExportProgress DivExportAtari2600::getProgress(int index) {
+  return DivROMExportProgress();
+}
+
+void DivExportAtari2600::run() {
 
   // get register dump
   const size_t numSongs = e->song.subsong.size();
@@ -187,28 +211,28 @@ std::vector<DivROMExportOutput> DivExportAtari2600::go(DivEngine* e) {
     registerDump(e, (int) subsong, registerWrites[subsong]);  
   }
   if (debugRegisterDump) {
-      writeRegisterDump(e, registerWrites, ret);
+      writeRegisterDump(registerWrites);
   }
 
   // write track data
   switch (exportType) {
     case DIV_EXPORT_TIA_RAW:
-      writeTrackDataRaw(e, true, registerWrites, ret);
+      writeTrackDataRaw(true, registerWrites);
       break;
     case DIV_EXPORT_TIA_BASIC:
-      writeTrackDataBasic(e, false, true, registerWrites, ret);
+      writeTrackDataBasic(false, true, registerWrites);
       break;
     case DIV_EXPORT_TIA_BASIC_RLE:
-      writeTrackDataBasic(e, true, true, registerWrites, ret);
+      writeTrackDataBasic(true, true, registerWrites);
       break;
     case DIV_EXPORT_TIA_TIACOMP:
-      writeTrackDataTIAComp(e, registerWrites, ret);
+      writeTrackDataTIAComp(registerWrites);
       break;
     case DIV_EXPORT_TIA_FSEQ:
-      writeTrackDataFSeq(e, registerWrites, ret);
+      writeTrackDataFSeq(registerWrites);
       break;
     case DIV_EXPORT_TIA_TIAZIP:
-      writeTrackDataTIAZip(e, registerWrites, true, ret);
+      writeTrackDataTIAZip(registerWrites, true);
       break;
   }
 
@@ -232,16 +256,13 @@ std::vector<DivROMExportOutput> DivExportAtari2600::go(DivEngine* e) {
     logD("shortening title to %s (%d)", title, title.length());
   }
   writeTextGraphics(titleData, title.c_str());
-  ret.push_back(DivROMExportOutput("Track_meta.asm", titleData));
+  output.push_back(DivROMExportOutput("Track_meta.asm", titleData));
 
-  return ret;
 
 }
 
 void DivExportAtari2600::writeRegisterDump(
-  DivEngine* e, 
-  std::vector<RegisterWrite> (*registerWrites),
-  std::vector<DivROMExportOutput> &ret
+  std::vector<RegisterWrite> (*registerWrites)
 ) {
   // dump all register writes
   SafeWriter* dump = new SafeWriter;
@@ -291,16 +312,14 @@ void DivExportAtari2600::writeRegisterDump(
 
   }
 
-  ret.push_back(DivROMExportOutput("RegisterDump.txt", dump));
+  output.push_back(DivROMExportOutput("RegisterDump.txt", dump));
 
 }
 
 // simple register dump
 void DivExportAtari2600::writeTrackDataRaw(
-  DivEngine* e, 
   bool encodeDuration,
-  std::vector<RegisterWrite> (*registerWrites),
-  std::vector<DivROMExportOutput> &ret
+  std::vector<RegisterWrite> (*registerWrites)
 ) {
 
   SafeWriter* trackData=new SafeWriter;
@@ -356,17 +375,15 @@ void DivExportAtari2600::writeTrackDataRaw(
     }
   }
 
-  ret.push_back(DivROMExportOutput("Track_data.asm", trackData));
+  output.push_back(DivROMExportOutput("Track_data.asm", trackData));
 
 }
 
 // simple register dump with separate tables for frequency and control / volume
 void DivExportAtari2600::writeTrackDataBasic(
-  DivEngine* e,
   bool encodeDuration,
   bool independentChannelPlayback,
-  std::vector<RegisterWrite> (*registerWrites),
-  std::vector<DivROMExportOutput> &ret
+  std::vector<RegisterWrite> (*registerWrites)
 ) {
   size_t numSongs = e->song.subsong.size();
 
@@ -539,15 +556,13 @@ void DivExportAtari2600::writeTrackDataBasic(
   size_t totalDataSize = songDataSize + freqTableSize + cvTableSize;
   trackData->writeText(fmt::sprintf("; Total Data Size %d\n", totalDataSize));
 
-  ret.push_back(DivROMExportOutput("Track_data.asm", trackData));
+  output.push_back(DivROMExportOutput("Track_data.asm", trackData));
 
 }
 
 // Compact delta encoding
 void DivExportAtari2600::writeTrackDataTIAComp(
-  DivEngine* e,
-  std::vector<RegisterWrite> (*registerWrites),
-  std::vector<DivROMExportOutput> &ret
+  std::vector<RegisterWrite> (*registerWrites)
 ) {
   size_t numSongs = e->song.subsong.size();
 
@@ -634,15 +649,13 @@ void DivExportAtari2600::writeTrackDataTIAComp(
   size_t totalDataSize = songDataSize + trackDataSize;
   trackData->writeText(fmt::sprintf("; Total Data Size %d\n", totalDataSize));
 
-  ret.push_back(DivROMExportOutput("Track_data.asm", trackData));
+  output.push_back(DivROMExportOutput("Track_data.asm", trackData));
 
 }
 
 // furnace sequence encoding
 void DivExportAtari2600::writeTrackDataFSeq(
-  DivEngine* e, 
-  std::vector<RegisterWrite> (*registerWrites),
-  std::vector<DivROMExportOutput> &ret
+  std::vector<RegisterWrite> (*registerWrites)
 ) {
 
   // convert to state sequences
@@ -872,7 +885,7 @@ void DivExportAtari2600::writeTrackDataFSeq(
     patternDataSize + waveformTableSize + waveformDataSize;
   trackData->writeText(fmt::sprintf("; Total Data Size %d\n", totalDataSize));
 
-  ret.push_back(DivROMExportOutput("Track_data.asm", trackData));
+  output.push_back(DivROMExportOutput("Track_data.asm", trackData));
 
 }
 
@@ -1071,10 +1084,8 @@ void SHOW_TREE(
 
 // compacted encoding
 void DivExportAtari2600::writeTrackDataTIAZip(
-  DivEngine* e, 
   const std::vector<RegisterWrite> (*registerWrites),
-  bool fixedCodes,
-  std::vector<DivROMExportOutput> &ret
+  bool fixedCodes
 ) {
   size_t numSongs = e->song.subsong.size();
 
@@ -1222,13 +1233,11 @@ void DivExportAtari2600::writeTrackDataTIAZip(
 
 
   encodeBitstreamDynamic(
-    e,
     codeSequences,
     compressedCodeSequences,
     spanSequences,
     0x0300,
-    4096 * 8,
-    ret
+    4096 * 8
   );
   
 }
@@ -1509,13 +1518,11 @@ void DivExportAtari2600::compressCodeSequence(
 }
 
 void DivExportAtari2600::encodeBitstreamDynamic(
-  DivEngine* e, 
   const std::vector<AlphaCode> (*codeSequences)[2],
   const std::vector<AlphaCode> (*compressedCodeSequences)[2],
   const std::vector<AlphaCode> (*spanSequences)[2],
   size_t dataOffset,
-  size_t blockSize,
-  std::vector<DivROMExportOutput> &ret
+  size_t blockSize
 )
 {
   size_t numSongs = e->song.subsong.size();
@@ -2180,7 +2187,7 @@ void DivExportAtari2600::encodeBitstreamDynamic(
   trackData->writeText(fmt::sprintf("; Jump Sequence Length: %d\n", totalSpanSequenceSize));
   trackData->writeText(fmt::sprintf("; Compressed Bytes %d\n", totalCompressedBytes));
 
-  ret.push_back(DivROMExportOutput("Track_data.asm", trackData));
+  output.push_back(DivROMExportOutput("Track_data.asm", trackData));
 
 }
 
