@@ -41,7 +41,7 @@ DivROMExport* DivEngine::buildROM(DivROMExportOptions sys) {
       exporter=new DivExportSAPR;
       break;
     case DIV_ROM_ATARI_2600:
-      exporter=new DivExportAtari2600(this);
+      exporter=new DivExportAtari2600;
       break;
     default:
       exporter=new DivROMExport;

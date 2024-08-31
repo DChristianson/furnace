@@ -729,11 +729,6 @@ src/engine/wavetable.cpp
 src/engine/waveSynth.cpp
 src/engine/wavOps.cpp
 src/engine/vgmOps.cpp
-src/engine/zsm.cpp
-src/engine/export/atari2600Export.cpp
-src/engine/export/registerDump.cpp
-src/engine/export/suffixTree.cpp
-src/engine/export/huffman.cpp
 src/engine/platform/abstract.cpp
 src/engine/platform/genesis.cpp
 src/engine/platform/genesisext.cpp
@@ -817,6 +812,10 @@ src/engine/export/amigaValidation.cpp
 src/engine/export/sapr.cpp
 src/engine/export/tiuna.cpp
 src/engine/export/zsm.cpp
+src/engine/export/atari2600Export.cpp
+src/engine/export/registerDump.cpp
+src/engine/export/suffixTree.cpp
+src/engine/export/huffman.cpp
 
 src/engine/effect/abstract.cpp
 src/engine/effect/dummy.cpp

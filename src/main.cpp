@@ -85,7 +85,6 @@ FurnaceCLI cli;
 
 String outName;
 String vgmOutName;
-String zsmOutName;
 String romOutName;
 String cmdOutName;
 String romOutName;
@@ -117,6 +116,8 @@ bool infoMode=false;
 bool noReportError=false;
 
 std::vector<TAParam> params;
+
+DivConfig romConfig=DivConfig();
 
 #ifdef HAVE_LOCALE
 char reqLocaleCopy[64];
@@ -582,7 +583,6 @@ int main(int argc, char** argv) {
 #endif
   outName="";
   vgmOutName="";
-  zsmOutName="";
   cmdOutName="";
   romOutName="";
   txtOutName="";
@@ -884,7 +884,6 @@ int main(int argc, char** argv) {
   }
 
   if (outputMode) {
-
     if (cmdOutName!="") {
       SafeWriter* w=e.saveCommand();
       if (w!=NULL) {
@@ -919,31 +918,41 @@ int main(int argc, char** argv) {
     }
     if (romOutName!="") {
       // KLUDGE: assume one system
-      DivROMExportOptions exportOpt = DIV_ROM_ABSTRACT;
+      DivROMExportOptions romTarget = DIV_ROM_ABSTRACT;
       switch (e.song.system[0]) {
         case DIV_SYSTEM_AMIGA:
-          exportOpt = DIV_ROM_AMIGA_VALIDATION;
+          romTarget = DIV_ROM_AMIGA_VALIDATION;
           break;
         case DIV_SYSTEM_TIA:
-          exportOpt = DIV_ROM_ATARI_2600;
+          romTarget = DIV_ROM_TIUNA;
           break;
       };
       logD("building ROM for %s", e.getSystemName(e.song.system[0]));
-      std::vector<DivROMExportOutput> out=e.buildROM(exportOpt);
-      if (romOutName[romOutName.size()-1]!=DIR_SEPARATOR) romOutName+=DIR_SEPARATOR_STR;
-      logD("export ROM %s", romOutName);
-      for (DivROMExportOutput& i: out) {
-        logD(" - %s", i.name);
-        String path=romOutName+i.name;
-        FILE* outFile=ps_fopen(path.c_str(),"wb");
-        if (outFile!=NULL) {
-          fwrite(i.data->getFinalBuf(),1,i.data->size(),outFile);
-          fclose(outFile);
-        } else {
-          reportError(fmt::sprintf("could not open file! (%s)",e.getLastError()));
+      DivROMExport *pendingExport=e.buildROM(romTarget);
+      if (pendingExport==NULL) {
+        reportError("could not create exporter! you may want to report this issue...");
+      } else {
+        pendingExport->setConf(romConfig);
+        pendingExport->go(&e);
+        pendingExport->wait();
+        if (!pendingExport->hasFailed()) {
+          // save files
+          if (romOutName[romOutName.size()-1]!=DIR_SEPARATOR) romOutName+=DIR_SEPARATOR_STR;
+          for (DivROMExportOutput& i: pendingExport->getResult()) {
+            String path=romOutName;
+            path+=DIR_SEPARATOR_STR;
+            path+=i.name;
+            FILE* outFile=ps_fopen(path.c_str(),"wb");
+            if (outFile!=NULL) {
+              fwrite(i.data->getFinalBuf(),1,i.data->size(),outFile);
+              fclose(outFile);
+            } else {
+              // TODO: handle failure here
+            }
+            i.data->finish();
+            delete i.data;
+          }
         }
-        i.data->finish();
-        delete i.data;
       }
     }
     if (outName!="") {

@@ -35,6 +35,7 @@ enum DivExportTIAType {
 
 class DivExportAtari2600 : public DivROMExport {
 
+  DivEngine* e;
   DivExportTIAType exportType; 
   bool debugRegisterDump;
 
@@ -44,9 +45,7 @@ class DivExportAtari2600 : public DivROMExport {
 
   // dump all register writes
   void writeRegisterDump(
-    DivEngine* e, 
-    std::vector<RegisterWrite> (*registerWrites),
-    std::vector<DivROMExportOutput> &ret
+    std::vector<RegisterWrite> (*registerWrites)
   );
 
   //
@@ -59,10 +58,8 @@ class DivExportAtari2600 : public DivROMExport {
   //  ...
   //
   void writeTrackDataRaw(
-    DivEngine* e, 
     bool encodeDuration,
-    std::vector<RegisterWrite> (*registerWrites),
-    std::vector<DivROMExportOutput> &ret
+    std::vector<RegisterWrite> (*registerWrites)
   );
 
   // 
@@ -72,11 +69,9 @@ class DivExportAtari2600 : public DivROMExport {
   // 2 bytes per channel
   // 
   void writeTrackDataBasic(
-    DivEngine* e, 
     bool encodeDuration,
     bool independentChannelPlayback,
-    std::vector<RegisterWrite> (*registerWrites),
-    std::vector<DivROMExportOutput> &ret
+    std::vector<RegisterWrite> (*registerWrites)
   );
 
   // 
@@ -86,9 +81,7 @@ class DivExportAtari2600 : public DivROMExport {
   // 2 bytes per channel
   // 
   void writeTrackDataTIAComp(
-    DivEngine* e, 
-    std::vector<RegisterWrite> (*registerWrites),
-    std::vector<DivROMExportOutput> &ret
+    std::vector<RegisterWrite> (*registerWrites)
   );
 
   //
@@ -96,9 +89,7 @@ class DivExportAtari2600 : public DivROMExport {
   // uncompressed sequences
   //
   void writeTrackDataFSeq(
-    DivEngine* e, 
-    std::vector<RegisterWrite> *registerWrites,
-    std::vector<DivROMExportOutput> &ret
+    std::vector<RegisterWrite> *registerWrites
   );
 
   //
@@ -106,10 +97,8 @@ class DivExportAtari2600 : public DivROMExport {
   // compressed sequences
   //
   void writeTrackDataTIAZip(
-    DivEngine* e, 
     const std::vector<RegisterWrite> (*registerWrites),
-    bool fixedCodes,
-    std::vector<DivROMExportOutput> &ret
+    bool fixedCodes
   );
 
   int encodeChannelState(
@@ -138,13 +127,11 @@ class DivExportAtari2600 : public DivROMExport {
   );
   
   void encodeBitstreamDynamic(
-    DivEngine* e, 
     const std::vector<AlphaCode> (*codeSequences)[2],
     const std::vector<AlphaCode> (*compressedCodeSequences)[2],
     const std::vector<AlphaCode> (*spanSequences)[2],
     size_t dataOffset,
-    size_t blockSize,
-    std::vector<DivROMExportOutput> &ret
+    size_t blockSize
   );
 
   void validateCodeSequence(
@@ -155,12 +142,18 @@ class DivExportAtari2600 : public DivROMExport {
     const std::vector<AlphaCode> &spanSequence
   );
 
+  void run();
+
 public:
 
-  DivExportAtari2600(DivEngine * e);
   ~DivExportAtari2600() {}
 
-  std::vector<DivROMExportOutput> go(DivEngine* e) override;
+  bool go(DivEngine* eng) override;
+  bool isRunning() override;
+  bool hasFailed() override;
+  void abort() override;
+  void wait() override;
+  DivROMExportProgress getProgress(int index=0) override;
 
 };
 
