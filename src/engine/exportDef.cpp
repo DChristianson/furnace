@@ -106,6 +106,17 @@ void DivEngine::registerROMExports() {
     false, DIV_REQPOL_ANY
   );
 
+  romExportDefs[DIV_ROM_ATARI_2600]=new DivROMExportDef(
+    "Atari 2600/7800 BASIC driver", "Dave Christianson",
+    "low-resource driver for use with 2600/7800 BASIC games.\n"
+    "",
+    "assembly files", ".asm",
+    {
+      DIV_SYSTEM_TIA
+    },
+    true, DIV_REQPOL_EXACT
+  );
+
   romExportDefs[DIV_ROM_SAP_R]=new DivROMExportDef(
     "Atari 8-bit SAP-R", "asiekierka",
     "SAP type R export for POKEY songs.\n"
@@ -142,4 +153,5 @@ void DivEngine::registerROMExports() {
     },
     false, DIV_REQPOL_ANY
   );
+
 }

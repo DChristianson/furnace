@@ -16,11 +16,11 @@ for filename in $testDir/export/*.fur; do
     configFile="$testDir/export/$target.conf"
     targetDir="$testDir/output/$timestamp/$target"
     echo "processing $sourceFile -> $targetDir"
-    configOverride="romout.tiaExportType=FSEQ"
+    configOverride="format=FSEQ"
     mkdir -p $targetDir
     cp -r $templateDir/* $targetDir
     if [ -e "$configFile" ]; then configOverride=`paste -sd "," $configFile`; fi
-    $FURNACE_ROOT/build/Debug/furnace --conf "romout.debugOutput=true,$configOverride" --romout $targetDir $filename > $targetDir/furnace_export.log
+    $FURNACE_ROOT/build/Debug/furnace --romtarget a2600basic --romconfig "debug=true,$configOverride" --romout $targetDir $filename > $targetDir/furnace_export.log
     (cd $targetDir && make)
     romFile=$targetDir/roms/MiniPlayer_NTSC.a26
     if [[ ! -e "$romFile" ]]; then 
