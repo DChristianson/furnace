@@ -119,4 +119,15 @@ void DivEngine::registerROMExports() {
     },
     false, DIV_REQPOL_EXACT
   );
+
+  romExportDefs[DIV_ROM_ATARI_2600_BASIC]=new DivROMExportDef(
+    "Atari 2600/7800 BASIC driver", "Dave Christianson",
+    "low-resource driver for use with 2600/7800 BASIC games.\n"
+    "",
+    "assembly files", ".asm",
+    {
+      DIV_SYSTEM_TIA
+    },
+    true, DIV_REQPOL_EXACT
+  );
 }

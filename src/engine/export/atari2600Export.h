@@ -24,7 +24,7 @@
 #include "registerDump.h"
 #include "suffixTree.h"
 
-enum DivExportTIAType {
+enum DivExportTIAFormat {
   DIV_EXPORT_TIA_RAW,       // raw data export - no driver support 
   DIV_EXPORT_TIA_BASIC,     // simple 2 channel sound driver
   DIV_EXPORT_TIA_BASIC_RLE, // simple 2 channel sound driver with duration
@@ -36,8 +36,9 @@ enum DivExportTIAType {
 class DivExportAtari2600 : public DivROMExport {
 
   DivEngine* e;
-  DivExportTIAType exportType; 
-  bool debugRegisterDump;
+  std::thread* exportThread;
+  DivROMExportProgress progress[2];
+  bool running, failed, mustAbort;
 
   size_t writeTextGraphics(SafeWriter* w, const char* value);
 

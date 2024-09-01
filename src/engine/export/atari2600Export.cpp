@@ -157,52 +157,61 @@ const char* TiaRegisterNames[] = {
   "AUDV1"
 };
 
-
 bool DivExportAtari2600::go(DivEngine* eng) {
+  progress[0].name = "Export";
+  progress[0].amount = 0.0f;
+
   e = eng;
-   String exportTypeString = conf.getString("romout.tiaExportType", "FSEQ");
-  logD("retrieving config exportType [%s]", exportTypeString);
-  // BUGBUG: cleanse and normalize
-  if (exportTypeString == "RAW") {
-    exportType = DIV_EXPORT_TIA_RAW;
-  } else if (exportTypeString == "BASIC") {
-    exportType = DIV_EXPORT_TIA_BASIC;
-  } else if (exportTypeString == "BASIC_RLE") {
-    exportType = DIV_EXPORT_TIA_BASIC_RLE;
-  } else if (exportTypeString == "TIACOMP") {
-    exportType = DIV_EXPORT_TIA_TIACOMP;
-  } else if (exportTypeString == "FSEQ") {
-    exportType = DIV_EXPORT_TIA_FSEQ;
-  } else if (exportTypeString == "TIAZIP") {
-    exportType = DIV_EXPORT_TIA_TIAZIP;
-  }
-  debugRegisterDump = conf.getBool("romout.debugOutput", false);
-  // BUGBUG: TODO: THREADS
-  run();
+  running = true;
+  failed = false;
+  mustAbort = false;
+  exportThread = new std::thread(&DivExportAtari2600::run, this);
   return true;
 }
 
 void DivExportAtari2600::wait() {
-  // BUGBUG: TODO
+  if (exportThread!=NULL) {
+    exportThread->join();
+    delete exportThread;
+  }
 }
 
 void DivExportAtari2600::abort() {
-  // BUGBUG: TODO
+  mustAbort=true;
+  wait();
 }
 
 bool DivExportAtari2600::isRunning() {
-  return true;
+  return running;
 }
 
 bool DivExportAtari2600::hasFailed() {
-  return false;
+  return failed;
 }
 
 DivROMExportProgress DivExportAtari2600::getProgress(int index) {
-  return DivROMExportProgress();
+  return progress[0];
 }
 
 void DivExportAtari2600::run() {
+
+  DivExportTIAFormat format;
+  String formatString = conf.getString("format", "FSEQ");
+  // BUGBUG: cleanse and normalize
+  if (formatString == "RAW") {
+    format = DIV_EXPORT_TIA_RAW;
+  } else if (formatString == "BASIC") {
+    format = DIV_EXPORT_TIA_BASIC;
+  } else if (formatString == "BASIC_RLE") {
+    format = DIV_EXPORT_TIA_BASIC_RLE;
+  } else if (formatString == "TIACOMP") {
+    format = DIV_EXPORT_TIA_TIACOMP;
+  } else if (formatString == "FSEQ") {
+    format = DIV_EXPORT_TIA_FSEQ;
+  } else if (formatString == "TIAZIP") {
+    format = DIV_EXPORT_TIA_TIAZIP;
+  }
+  bool debugRegisterDump = conf.getBool("debug", false);
 
   // get register dump
   const size_t numSongs = e->song.subsong.size();
@@ -215,7 +224,7 @@ void DivExportAtari2600::run() {
   }
 
   // write track data
-  switch (exportType) {
+  switch (format) {
     case DIV_EXPORT_TIA_RAW:
       writeTrackDataRaw(true, registerWrites);
       break;
@@ -257,8 +266,7 @@ void DivExportAtari2600::run() {
   }
   writeTextGraphics(titleData, title.c_str());
   output.push_back(DivROMExportOutput("Track_meta.asm", titleData));
-
-
+  running = false;
 }
 
 void DivExportAtari2600::writeRegisterDump(

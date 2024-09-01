@@ -117,6 +117,12 @@ bool noReportError=false;
 
 std::vector<TAParam> params;
 
+std::map<String, DivROMExportOptions> romTargets={
+  {"amiga", DIV_ROM_AMIGA_VALIDATION},
+  {"tiuna", DIV_ROM_TIUNA},
+  {"a2600basic", DIV_ROM_ATARI_2600_BASIC}
+};
+DivROMExportOptions romTarget=DIV_ROM_ABSTRACT;
 DivConfig romConfig=DivConfig();
 
 #ifdef HAVE_LOCALE
@@ -917,41 +923,44 @@ int main(int argc, char** argv) {
       }
     }
     if (romOutName!="") {
-      // KLUDGE: assume one system
-      DivROMExportOptions romTarget = DIV_ROM_ABSTRACT;
-      switch (e.song.system[0]) {
-        case DIV_SYSTEM_AMIGA:
-          romTarget = DIV_ROM_AMIGA_VALIDATION;
-          break;
-        case DIV_SYSTEM_TIA:
-          romTarget = DIV_ROM_TIUNA;
-          break;
-      };
-      logD("building ROM for %s", e.getSystemName(e.song.system[0]));
+      const DivROMExportDef *romExportDef = e.getROMExportDef(romTarget);
+      if (NULL == romExportDef) {
+        logE("--romtarget not specified");
+        return 1;
+
+      }
+      logD("building ROM for %s", romExportDef->name);
       DivROMExport *pendingExport=e.buildROM(romTarget);
       if (pendingExport==NULL) {
-        reportError("could not create exporter! you may want to report this issue...");
+        logE("could not create exporter! you may want to report this issue...");
+        return 1;
+
       } else {
         pendingExport->setConf(romConfig);
         pendingExport->go(&e);
         pendingExport->wait();
-        if (!pendingExport->hasFailed()) {
-          // save files
-          if (romOutName[romOutName.size()-1]!=DIR_SEPARATOR) romOutName+=DIR_SEPARATOR_STR;
-          for (DivROMExportOutput& i: pendingExport->getResult()) {
-            String path=romOutName;
+        if (pendingExport->hasFailed()) {
+          logE("export reports failure");
+          return 1;
+        }
+        // save files
+        if (romOutName[romOutName.size()-1]!=DIR_SEPARATOR) romOutName+=DIR_SEPARATOR_STR;
+        for (DivROMExportOutput& i: pendingExport->getResult()) {
+          String path=romOutName;
+          if (romExportDef->multiOutput) {
             path+=DIR_SEPARATOR_STR;
             path+=i.name;
-            FILE* outFile=ps_fopen(path.c_str(),"wb");
-            if (outFile!=NULL) {
-              fwrite(i.data->getFinalBuf(),1,i.data->size(),outFile);
-              fclose(outFile);
-            } else {
-              // TODO: handle failure here
-            }
-            i.data->finish();
-            delete i.data;
           }
+          FILE* outFile=ps_fopen(path.c_str(),"wb");
+          if (outFile!=NULL) {
+            fwrite(i.data->getFinalBuf(),1,i.data->size(),outFile);
+            fclose(outFile);
+          } else {
+            logE("could not open output file %s", path);
+            return 1;
+          }
+          i.data->finish();
+          delete i.data;
         }
       }
     }
