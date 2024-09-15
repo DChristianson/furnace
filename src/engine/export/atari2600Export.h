@@ -24,13 +24,16 @@
 #include "registerDump.h"
 #include "suffixTree.h"
 
+
 enum DivExportTIAFormat {
   DIV_EXPORT_TIA_RAW,       // raw data export - no driver support 
   DIV_EXPORT_TIA_BASIC,     // simple 2 channel sound driver
   DIV_EXPORT_TIA_BASIC_RLE, // simple 2 channel sound driver with duration
-  DIV_EXPORT_TIA_TIACOMP,   // TIAComp compact delta encoding
+  DIV_EXPORT_TIA_TIACOMP,   // compact register encoding without compression
+  DIV_EXPORT_TIA_TIAZIP_0,  // compact register encoding with shallow compression 
+  DIV_EXPORT_TIA_TIAZIP_1,  // compact register encoding with LZ sequence compression
+  DIV_EXPORT_TIA_TIAZIP_2,  // huffman coded LZ sequence compression
   DIV_EXPORT_TIA_FSEQ,      // Furnace sequence pattern (DEPRECATED)
-  DIV_EXPORT_TIA_TIAZIP     // TIAZip LZ-based compression
 };
 
 class DivExportAtari2600 : public DivROMExport {
@@ -39,10 +42,6 @@ class DivExportAtari2600 : public DivROMExport {
   std::thread* exportThread;
   DivROMExportProgress progress[2];
   bool running, failed, mustAbort;
-
-  size_t writeTextGraphics(SafeWriter* w, const char* value);
-
-  void writeWaveformHeader(SafeWriter* w, const char* key);
 
   // dump all register writes
   void writeRegisterDump(
@@ -86,35 +85,21 @@ class DivExportAtari2600 : public DivROMExport {
   );
 
   //
-  // Sequenced encoding 
-  // uncompressed sequences
-  //
-  void writeTrackDataFSeq(
-    std::vector<RegisterWrite> *registerWrites
-  );
-
-  //
   // LZ-type encoding 
   // compressed sequences
   //
   void writeTrackDataTIAZip(
     const std::vector<RegisterWrite> (*registerWrites),
+    bool shallowCompression,
     bool fixedCodes
   );
 
-  int encodeChannelState(
-    const ChannelState& next,
-    const char duration,
-    const ChannelState& last,
-    bool encodeRemainder,
-    std::vector<unsigned char> &out
-  );
-
-  size_t encodeChannelStateCodes(
-    const ChannelState& next,
-    const char duration,
-    const ChannelState& last,
-    std::vector<AlphaCode> &out
+  //
+  // Sequenced encoding 
+  // uncompressed sequences
+  //
+  void writeTrackDataFSeq(
+    std::vector<RegisterWrite> *registerWrites
   );
 
   void compressCodeSequence(
@@ -142,6 +127,24 @@ class DivExportAtari2600 : public DivROMExport {
     const std::vector<AlphaCode> &compressedCodeSequence,
     const std::vector<AlphaCode> &spanSequence
   );
+
+  int encodeChannelState(
+    const ChannelState& next,
+    const char duration,
+    const ChannelState& last,
+    bool encodeRemainder,
+    std::vector<unsigned char> &out
+  );
+
+  size_t encodeChannelStateCodes(
+    const ChannelState& next,
+    const char duration,
+    const ChannelState& last,
+    std::vector<AlphaCode> &out
+  );
+
+  size_t writeTextGraphics(SafeWriter* w, const char* value);
+  void writeWaveformHeader(SafeWriter* w, const char* key);
 
   void run();
 
