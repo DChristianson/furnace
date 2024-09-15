@@ -208,12 +208,8 @@ void DivExportAtari2600::run() {
     format = DIV_EXPORT_TIA_BASIC_RLE;
   } else if (formatString == "TIACOMP") {
     format = DIV_EXPORT_TIA_TIACOMP;
-  } else if (formatString == "TIAZIP_0") {
-    format = DIV_EXPORT_TIA_TIAZIP_0;
-  } else if (formatString == "TIAZIP_1") {
-    format = DIV_EXPORT_TIA_TIAZIP_1;
-  } else if (formatString == "TIAZIP_2") {
-    format = DIV_EXPORT_TIA_TIAZIP_2;
+  } else if (formatString == "TIAZIP") {
+    format = DIV_EXPORT_TIA_TIAZIP;
   } else if (formatString == "FSEQ") {
     format = DIV_EXPORT_TIA_FSEQ;
   }
@@ -243,17 +239,11 @@ void DivExportAtari2600::run() {
     case DIV_EXPORT_TIA_TIACOMP:
       writeTrackDataTIAComp(registerWrites);
       break;
+    case DIV_EXPORT_TIA_TIAZIP:
+      writeTrackDataTIAZip(registerWrites, false, false);
+      break;
     case DIV_EXPORT_TIA_FSEQ:
       writeTrackDataFSeq(registerWrites);
-      break;
-    case DIV_EXPORT_TIA_TIAZIP_0:
-      writeTrackDataTIAZip(registerWrites, true, true);
-      break;
-    case DIV_EXPORT_TIA_TIAZIP_1:
-      writeTrackDataTIAZip(registerWrites, false, true);
-      break;
-    case DIV_EXPORT_TIA_TIAZIP_2:
-      writeTrackDataTIAZip(registerWrites, false, false);
       break;
   }
 
@@ -1557,7 +1547,7 @@ void DivExportAtari2600::encodeBitstreamDynamic(
 
   trackData->writeText(fmt::sprintf("\nAUDIO_NUM_TRACKS = %d\n", numSongs));
 
-  trackData->writeText("\n#include \"cores/tiazip_player_core.asm\"\n");
+  trackData->writeText("\n#include \"cores/tiazip_2_player_core.asm\"\n");
 
   // create a lookup table for use in player apps
   size_t songDataSize = 0;
@@ -1734,7 +1724,6 @@ void DivExportAtari2600::encodeBitstreamDynamic(
   size_t streamDataOffset = (dataOffset << 3);
   Bitstream *dataStreams[e->song.subsong.size()][2];
   Bitstream *trackStreams[e->song.subsong.size()][2];
-  Bitstream *jumpStreams[e->song.subsong.size()][2];
   std::vector<size_t> jumpAddresses;
   jumpAddresses.resize(jumpMap.size());
   for (size_t subsong = 0; subsong < e->song.subsong.size(); subsong++) {
@@ -1776,7 +1765,7 @@ void DivExportAtari2600::encodeBitstreamDynamic(
               CHANGE_STATE fc = GET_CODE_WRITE_FC(c);
               if (fc == CHANGE_STATE::CHANGE) {
                 unsigned char fx = GET_CODE_WRITE_FX(c);
-                dataStream->writeBits(fx, 5);
+                dataStream->writeBits(frequencyCodeIndex.at((fc << 8) | fx));// dataStream->writeBits(fx, 5);
               }
               CHANGE_STATE vc = GET_CODE_WRITE_VC(c);
               if (vc == CHANGE_STATE::CHANGE) {
@@ -1837,11 +1826,9 @@ void DivExportAtari2600::encodeBitstreamDynamic(
       logD("encoding track stream for %d %d", subsong, channel);
       logD("encoding jump stream for %d %d", subsong, channel);
       auto &spanSequence = spanSequences[subsong][channel];
-      std::map<size_t, size_t> jumpStreamPointerMap;
+      std::map<size_t, size_t> trackStreamPointerMap;
       Bitstream *trackStream = new Bitstream(blockSize);
       trackStreams[subsong][channel] = trackStream;
-      Bitstream *jumpStream = new Bitstream(blockSize);
-      jumpStreams[subsong][channel] = jumpStream;
       for (size_t i = 0; i < spanSequence.size(); i++) {
         AlphaCode s = spanSequence[i];
         if (s == CODE_STOP) {
@@ -1875,8 +1862,8 @@ void DivExportAtari2600::encodeBitstreamDynamic(
           } else {
             size_t address = GET_CODE_JUMP_ADDRESS(s);
             trackStream->writeBit(true); // no lookup
-            jumpStreamPointerMap[jumpStream->position()] = address;
-            jumpStream->writeBits(address, addressBits);
+            trackStreamPointerMap[trackStream->position()] = address;
+            trackStream->writeBits(address, addressBits);
 
           }
         } else {
@@ -1886,10 +1873,10 @@ void DivExportAtari2600::encodeBitstreamDynamic(
         }
       }
 
-      for (auto& x : jumpStreamPointerMap) {
-        jumpStream->seek(x.first);
+      for (auto& x : trackStreamPointerMap) {
+        trackStream->seek(x.first);
         size_t address = positionMap[x.second];
-        jumpStream->writeBits(address, addressBits);
+        trackStream->writeBits(address, addressBits);
       }
 
       for (auto& x : jumpMap) {
@@ -1918,8 +1905,6 @@ void DivExportAtari2600::encodeBitstreamDynamic(
       dataStream->seek(0);
       auto trackStream = trackStreams[subsong][channel];
       trackStream->seek(0);
-      auto jumpStream = jumpStreams[subsong][channel];
-      jumpStream->seek(0);
       size_t i = 0;
       size_t returnAddress = 0;
       size_t maxOffset = 0;
@@ -1935,7 +1920,7 @@ void DivExportAtari2600::encodeBitstreamDynamic(
             unsigned char cx = control & 0x0f;
 
             CHANGE_STATE fc = CHANGE_STATE::CHANGE;
-            unsigned char fx = dataStream->readBits(5);
+            unsigned char fx = frequencyTree->decode(dataStream);//->readBits(5);
 
             AlphaCode volume = volumeTree->decode(dataStream);
             CHANGE_STATE vc = (CHANGE_STATE) (volume >> 8);
@@ -1948,7 +1933,7 @@ void DivExportAtari2600::encodeBitstreamDynamic(
           case CODE_WRITE_DELTA_011: {
 
             CHANGE_STATE fc = CHANGE_STATE::CHANGE;
-            unsigned char fx = dataStream->readBits(5);
+            unsigned char fx = frequencyTree->decode(dataStream);//->readBits(5);
 
             AlphaCode volume = volumeTree->decode(dataStream);
             CHANGE_STATE vc = (CHANGE_STATE) (volume >> 8);
@@ -1971,7 +1956,7 @@ void DivExportAtari2600::encodeBitstreamDynamic(
           case CODE_WRITE_DELTA_010: {
 
             CHANGE_STATE fc = CHANGE_STATE::CHANGE;
-            unsigned char fx = dataStream->readBits(5);
+            unsigned char fx = frequencyTree->decode(dataStream);//->readBits(5);
 
             code = CODE_WRITE_DELTA(CHANGE_STATE::NOOP, 0, fc, fx, CHANGE_STATE::NOOP, 0, 1);
             break;
@@ -2050,7 +2035,7 @@ void DivExportAtari2600::encodeBitstreamDynamic(
             } else if (sx == CODE_TAKE_TRACK_JUMP) {
               bool isAddress = trackStream->readBit();
               if (isAddress) {
-                nextAddress = jumpStream->readBits(addressBits);
+                nextAddress = trackStream->readBits(addressBits);
               } else {
                 size_t index = trackStream->readBits(addressIndexBits);
                 nextAddress = jumpAddresses[index];
@@ -2084,7 +2069,6 @@ void DivExportAtari2600::encodeBitstreamDynamic(
       assert(i == codeSequence.size());
       assert(!dataStream->hasBits());
       assert(!trackStream->hasBits());
-      assert(!jumpStream->hasBits());
 
       streamDataOffset += (dataStream->bytesUsed() << 3);
     }
@@ -2097,7 +2081,6 @@ void DivExportAtari2600::encodeBitstreamDynamic(
   // write the data streams
   for (size_t subsong = 0; subsong < e->song.subsong.size(); subsong++) {
     for (int channel = 0; channel < 2; channel += 1) {
-      logD("assembling track data for %d %d", subsong, channel);
       trackData->writeText(fmt::sprintf("\nAUDIO_DATA_S%d_C%d_START", subsong, channel));
       Bitstream *dataStream = dataStreams[subsong][channel];
       dataStream->seek(0);
@@ -2122,7 +2105,6 @@ void DivExportAtari2600::encodeBitstreamDynamic(
   // write the track streams
   for (size_t subsong = 0; subsong < e->song.subsong.size(); subsong++) {
     for (int channel = 0; channel < 2; channel += 1) {
-      logD("assembling track data for %d %d", subsong, channel);
       trackData->writeText(fmt::sprintf("\nAUDIO_TRACK_S%d_C%d_START", subsong, channel));
       Bitstream *trackStream = trackStreams[subsong][channel];
       trackStream->seek(0);
@@ -2143,47 +2125,30 @@ void DivExportAtari2600::encodeBitstreamDynamic(
       delete trackStream;
     }
   }
-  // write the jump streams
-  for (size_t subsong = 0; subsong < e->song.subsong.size(); subsong++) {
-    for (int channel = 0; channel < 2; channel += 1) {
-      logD("assembling jump data for %d %d", subsong, channel);
-      trackData->writeText(fmt::sprintf("\nAUDIO_JUMP_%d_C%d_START", subsong, channel));
-      Bitstream *jumpStream = jumpStreams[subsong][channel];
-      jumpStream->seek(0);
-      size_t mod = 0;
-      size_t bytesWritten = 0;
-      while (jumpStream->hasBits()) {
-        unsigned char uc = jumpStream->readByte();
-        if (mod == 0) {
-          trackData->writeText(fmt::sprintf("\n    byte $%02x", uc));
-        } else {
-          trackData->writeText(fmt::sprintf(", $%02x", uc));
-        }
-        mod = (mod + 1) % 16;
-        bytesWritten++;
-      }
-      trackData->writeText(fmt::sprintf("\n; AUDIO_JUMP_%d_C%d bytes: %d\n", subsong, channel, bytesWritten));
-      totalCompressedBytes += bytesWritten;
-      delete jumpStream;
-    }
-  }
 
   // write the jump table
-  trackData->writeText(fmt::sprintf("\n; AUDIO_JUMP_TABLE_LO_START"));
+  trackData->writeText(fmt::sprintf("\nAUDIO_JUMP_TABLE_LO_START"));
   for (auto addr : jumpAddresses) {
       trackData->writeText(fmt::sprintf("\n    byte $%02x", addr & 0x0f));
       totalCompressedBytes += 1;
   }
-  trackData->writeText(fmt::sprintf("\n; AUDIO_JUMP_TABLE_HI_START"));
+  trackData->writeText(fmt::sprintf("\nAUDIO_JUMP_TABLE_HI_START"));
   for (auto addr : jumpAddresses) {
       trackData->writeText(fmt::sprintf("\n    byte $%02x", addr >> 8));
       totalCompressedBytes += 1;
   }
 
-  // write the decoders
-  // BUGBUG: TODO
-  delete spanTree;
+  // write decoder tables
+  totalCompressedBytes += writeDynamicCodes(trackData, "audio_decode_command", abstractCodeTree);
+  totalCompressedBytes += writeDynamicCodes(trackData, "audio_decode_span", spanTree);
+  totalCompressedBytes += writeDynamicCodes(trackData, "audio_decode_control", controlTree);
+  totalCompressedBytes += writeDynamicCodes(trackData, "audio_decode_frequency", frequencyTree);
+  totalCompressedBytes += writeDynamicCodes(trackData, "audio_decode_volume", volumeTree);
+  totalCompressedBytes += writeDynamicCodes(trackData, "audio_decode_duration", durationTree);
+
+  // cleanup
   delete abstractCodeTree;
+  delete spanTree;
   delete controlTree;
   delete frequencyTree;
   delete volumeTree;
@@ -2196,6 +2161,15 @@ void DivExportAtari2600::encodeBitstreamDynamic(
 
   output.push_back(DivROMExportOutput("Track_data.asm", trackData));
 
+}
+
+size_t DivExportAtari2600::writeDynamicCodes(
+  SafeWriter *w,
+  const char *label,
+  const HuffmanTree *codeTree
+) {
+  w->writeText(fmt::sprintf("\n%s", label));
+  return 32;
 }
 
 void DivExportAtari2600::validateCodeSequence(
