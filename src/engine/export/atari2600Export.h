@@ -23,16 +23,14 @@
 #include "../engine.h"
 #include "registerDump.h"
 #include "suffixTree.h"
-
+#include "huffman.h"
 
 enum DivExportTIAFormat {
   DIV_EXPORT_TIA_RAW,       // raw data export - no driver support 
   DIV_EXPORT_TIA_BASIC,     // simple 2 channel sound driver
   DIV_EXPORT_TIA_BASIC_RLE, // simple 2 channel sound driver with duration
   DIV_EXPORT_TIA_TIACOMP,   // compact register encoding without compression
-  DIV_EXPORT_TIA_TIAZIP_0,  // compact register encoding with shallow compression 
-  DIV_EXPORT_TIA_TIAZIP_1,  // compact register encoding with LZ sequence compression
-  DIV_EXPORT_TIA_TIAZIP_2,  // huffman coded LZ sequence compression
+  DIV_EXPORT_TIA_TIAZIP,    // dynamically coded LZ sequence compression
   DIV_EXPORT_TIA_FSEQ,      // Furnace sequence pattern (DEPRECATED)
 };
 
@@ -145,6 +143,7 @@ class DivExportAtari2600 : public DivROMExport {
 
   size_t writeTextGraphics(SafeWriter* w, const char* value);
   void writeWaveformHeader(SafeWriter* w, const char* key);
+  size_t writeDynamicCodes(SafeWriter* w, const char *label, const HuffmanTree *codeTree);
 
   void run();
 

@@ -122,7 +122,7 @@ _load_first_byte            ror
             sta audio_data_ptr+1,x
             jmp _audio_next_note
 
-            ; read one data bit from a stream
+            ; read one data bit from audio stream
             ; uses a sentinel bit and a few tricks picked up from
             ; http://forum.6502.org/viewtopic.php?f=2&t=4642    
 audio_read_bit
