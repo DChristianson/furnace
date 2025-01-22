@@ -77,6 +77,7 @@ void DivEngine::registerROMExports() {
     "Amiga Validation", "tildearrow",
     "a test export for ensuring Amiga emulation is accurate. do not use!",
     NULL, NULL,
+    "amiga",
     {DIV_SYSTEM_AMIGA},
     true, DIV_REQPOL_EXACT
   );
@@ -89,6 +90,7 @@ void DivEngine::registerROMExports() {
     "- https://github.com/mooinglemur/melodius (player)\n"
     "- https://github.com/ZeroByteOrg/calliope (player)\n",
     "ZSM file", ".zsm",
+    "zsm",
     {
       DIV_SYSTEM_YM2151, DIV_SYSTEM_VERA
     },
@@ -100,6 +102,7 @@ void DivEngine::registerROMExports() {
     "advanced driver with software tuning support.\n"
     "see https://github.com/AYCEdemo/twin-tiuna for code.",
     "assembly files", ".asm",
+    "tiuna",
     {
       DIV_SYSTEM_TIA
     },
@@ -114,20 +117,23 @@ void DivEngine::registerROMExports() {
     "- Altirra\n"
     "- lzss-sap (https://github.com/dmsc/lzss-sap/)",
     "SAP files", ".sap",
+    "sap",
     {
       DIV_SYSTEM_POKEY
     },
     false, DIV_REQPOL_EXACT
   );
 
-  romExportDefs[DIV_ROM_ATARI_2600_BASIC]=new DivROMExportDef(
-    "Atari 2600/7800 BASIC driver", "Dave Christianson",
-    "low-resource driver for use with 2600/7800 BASIC games.\n"
+  romExportDefs[DIV_ROM_TIAZIP]=new DivROMExportDef(
+    "Atari 2600 TIAZIP driver", "Dave Christianson",
+    "low resource usage driver for use with Atari 2600 and 7800 games.\n"
     "",
     "assembly files", ".asm",
+    "tiazip",
     {
       DIV_SYSTEM_TIA
     },
     true, DIV_REQPOL_EXACT
   );
+
 }

@@ -32,7 +32,7 @@ enum DivROMExportOptions {
   DIV_ROM_ZSM,
   DIV_ROM_TIUNA,
   DIV_ROM_SAP_R,
-  DIV_ROM_ATARI_2600_BASIC,
+  DIV_ROM_TIAZIP,
   DIV_ROM_MAX
 };
 
@@ -90,16 +90,18 @@ struct DivROMExportDef {
   const char* description;
   const char* fileType;
   const char* fileExt;
+  const char* targetName;
   std::vector<DivSystem> requisites;
   bool multiOutput;
   DivROMExportReqPolicy requisitePolicy;
 
-  DivROMExportDef(const char* n, const char* a, const char* d, const char* ft, const char* fe, std::initializer_list<DivSystem> req, bool multiOut, DivROMExportReqPolicy reqPolicy):
+  DivROMExportDef(const char* n, const char* a, const char* d, const char* ft, const char* fe, const char * t, std::initializer_list<DivSystem> req, bool multiOut, DivROMExportReqPolicy reqPolicy):
     name(n),
     author(a),
     description(d),
     fileType(ft),
     fileExt(fe),
+    targetName(t),
     multiOutput(multiOut),
     requisitePolicy(reqPolicy) {
     requisites=req;

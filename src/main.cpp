@@ -85,7 +85,6 @@ FurnaceCLI cli;
 
 String outName;
 String vgmOutName;
-String romOutName;
 String cmdOutName;
 String romOutName;
 String txtOutName;
@@ -116,14 +115,6 @@ bool infoMode=false;
 bool noReportError=false;
 
 std::vector<TAParam> params;
-
-std::map<String, DivROMExportOptions> romTargets={
-  {"amiga", DIV_ROM_AMIGA_VALIDATION},
-  {"tiuna", DIV_ROM_TIUNA},
-  {"a2600basic", DIV_ROM_ATARI_2600_BASIC}
-};
-DivROMExportOptions romTarget=DIV_ROM_ABSTRACT;
-DivConfig romConfig=DivConfig();
 
 #ifdef HAVE_LOCALE
 char reqLocaleCopy[64];
@@ -922,48 +913,6 @@ int main(int argc, char** argv) {
         reportError(_("could not write VGM!"));
       }
     }
-    if (romOutName!="") {
-      const DivROMExportDef *romExportDef = e.getROMExportDef(romTarget);
-      if (NULL == romExportDef) {
-        logE("--romtarget not specified");
-        return 1;
-
-      }
-      logD("building ROM for %s", romExportDef->name);
-      DivROMExport *pendingExport=e.buildROM(romTarget);
-      if (pendingExport==NULL) {
-        logE("could not create exporter! you may want to report this issue...");
-        return 1;
-
-      } else {
-        pendingExport->setConf(romConfig);
-        pendingExport->go(&e);
-        pendingExport->wait();
-        if (pendingExport->hasFailed()) {
-          logE("export reports failure");
-          return 1;
-        }
-        // save files
-        if (romOutName[romOutName.size()-1]!=DIR_SEPARATOR) romOutName+=DIR_SEPARATOR_STR;
-        for (DivROMExportOutput& i: pendingExport->getResult()) {
-          String path=romOutName;
-          if (romExportDef->multiOutput) {
-            path+=DIR_SEPARATOR_STR;
-            path+=i.name;
-          }
-          FILE* outFile=ps_fopen(path.c_str(),"wb");
-          if (outFile!=NULL) {
-            fwrite(i.data->getFinalBuf(),1,i.data->size(),outFile);
-            fclose(outFile);
-          } else {
-            logE("could not open output file %s", path);
-            return 1;
-          }
-          i.data->finish();
-          delete i.data;
-        }
-      }
-    }
     if (outName!="") {
       e.setConsoleMode(true);
       e.saveAudio(outName.c_str(),exportOptions);
@@ -972,6 +921,8 @@ int main(int argc, char** argv) {
     if (romOutName!="") {
       e.setConsoleMode(true);
       // select ROM target type
+      String romTargetName = romExportConfig.getString("_target", "");
+      bool matchByTargetName = romTargetName.length() > 0;
       DivROMExportOptions romTarget = DIV_ROM_ABSTRACT;
       String lowerCase=romOutName;
       for (char& i: lowerCase) {
@@ -981,11 +932,20 @@ int main(int argc, char** argv) {
         DivROMExportOptions opt = (DivROMExportOptions)i;
         if (e.isROMExportViable(opt)) {
           const DivROMExportDef* newDef=e.getROMExportDef((DivROMExportOptions)i);
-          if (newDef->fileExt &&
-              lowerCase.length()>=strlen(newDef->fileExt) &&
-              lowerCase.substr(lowerCase.length()-strlen(newDef->fileExt))==newDef->fileExt) {
-            romTarget = opt;
-            break; // extension matched, stop searching
+          if (matchByTargetName) {
+            logI("comparing ROM format %s to %s", romTargetName, newDef->targetName);
+            if (romTargetName == newDef->targetName) {
+              romTarget = opt;
+              break;
+            }
+          } else {
+            logI("comparing ROM format by ext %s to %s", romTargetName, newDef->targetName);
+            if (newDef->fileExt &&
+                lowerCase.length()>=strlen(newDef->fileExt) &&
+                lowerCase.substr(lowerCase.length()-strlen(newDef->fileExt))==newDef->fileExt) {
+              romTarget = opt;
+              break; // extension matched, stop searching
+            }
           }
           if (romTarget == DIV_ROM_ABSTRACT) {
             romTarget = opt; // use first viable, but keep searching for extension match
@@ -993,6 +953,7 @@ int main(int argc, char** argv) {
         }
       }
       if (romTarget > DIV_ROM_ABSTRACT && romTarget < DIV_ROM_MAX) {
+        logI("exporting ROM format %s", e.getROMExportDef(romTarget)->name);
         DivROMExport* pendingExport = e.buildROM(romTarget);
         if (pendingExport==NULL) {
           reportError(_("could not create exporter! you may want to report this issue..."));

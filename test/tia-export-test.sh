@@ -20,7 +20,7 @@ for filename in $testDir/export/*.fur; do
     mkdir -p $targetDir
     cp -r $templateDir/* $targetDir
     if [ -e "$configFile" ]; then configOverride=`paste -sd "," $configFile`; fi
-    $FURNACE_ROOT/build/Debug/furnace --romtarget a2600basic --romconfig "debug=true,$configOverride" --romout $targetDir $filename > $targetDir/furnace_export.log
+    $FURNACE_ROOT/build/Debug/furnace --romconf _target=tiazip --romconf debug=true --romconf $configOverride --romout $targetDir $filename > $targetDir/furnace_export.log
     (cd $targetDir && make)
     romFile=$targetDir/roms/MiniPlayer_NTSC.a26
     if [[ ! -e "$romFile" ]]; then 

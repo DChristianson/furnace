@@ -40,7 +40,7 @@ DivROMExport* DivEngine::buildROM(DivROMExportOptions sys) {
     case DIV_ROM_SAP_R:
       exporter=new DivExportSAPR;
       break;
-    case DIV_ROM_ATARI_2600_BASIC:
+    case DIV_ROM_TIAZIP:
       exporter=new DivExportAtari2600;
       break;
     default:
