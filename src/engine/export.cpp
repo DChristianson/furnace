@@ -36,7 +36,7 @@ DivROMExport* DivEngine::buildROM(DivROMExportOptions sys) {
     case DIV_ROM_TIUNA:
       exporter=new DivExportTiuna;
       break;
-    case DIV_ROM_ATARI_2600:
+    case DIV_ROM_TIAZIP:
       exporter=new DivExportAtari2600;
       break;
     case DIV_ROM_ZSM:
