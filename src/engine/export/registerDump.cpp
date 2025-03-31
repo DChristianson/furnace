@@ -19,12 +19,11 @@
 
 #include "registerDump.h"
 
-void registerDump(
-  DivEngine* e, 
-  int subsong,
-  std::vector<RegisterWrite> &writes
-) {
- for (int i=0; i<e->song.systemLen; i++) {
+RegisterDump::RegisterDump(
+  DivEngine* e,
+  size_t subsong
+) : subsong(subsong) {
+  for (int i=0; i<e->song.systemLen; i++) {
     e->getDispatch(i)->toggleRegisterDump(true);
   }
   e->changeSongP(subsong);
@@ -112,16 +111,13 @@ void registerDump(
 /**
  * Extract channel states from register writes.
  */
-void writeChannelStateSequence(
-  const std::vector<RegisterWrite> &writes,
-  int subsong,
+void RegisterDump::writeChannelStateSequence(
   int channel,
   int systemIndex,
   int suppressVolume,
   const std::map<unsigned int, unsigned int> &addressMap,
   ChannelStateSequence &dumpSequence 
 ) {
-
 
   RowIndex curRowIndex(subsong, 0, 0);
   long lastWriteIndex = -1;
@@ -177,104 +173,3 @@ void writeChannelStateSequence(
 
   }
 }
-
-/**
- * Extract channel states in a song, keyed on subsong, ord, row and channel.
- */
-void writeChannelStateSequenceByRow(
-  const std::vector<RegisterWrite> &writes,
-  int subsong,
-  int channel,
-  int systemIndex,
-  int suppressVolume,
-  const std::map<unsigned int, unsigned int> &addressMap,
-  std::vector<String> &sequence,
-  std::map<String, ChannelStateSequence> &registerDumps 
-) {
-  
-  long lastWriteIndex = -1;
-  int lastWriteTicks = 0;
-  int lastWriteSeconds = 0;
-  int deltaTicksR = 0;
-  int deltaTicks = 0;
-
-  RowIndex curRowIndex(subsong, 0, 0);
-
-  ChannelState currentState(0);
-  ChannelStateSequence *currentDumpSequence = NULL;
-  
-  for (auto &write : writes) {
-    
-    long currentWriteIndex = write.writeIndex;
-    int currentTicks = write.ticks;
-    int currentSeconds = write.seconds;
-    int freq = ((float)TICKS_PER_SECOND) / write.hz;
-
-    deltaTicks = 
-      currentTicks - lastWriteTicks + 
-      (TICKS_PER_SECOND * (currentSeconds - lastWriteSeconds));
-
-    // check if we've moved in time
-    if (lastWriteIndex < currentWriteIndex) {
-      if (lastWriteIndex >= 0) {
-        auto lastState = currentState;
-        // if volume register is zero, clear all registers
-        if (suppressVolume >= 0) {
-          if (lastState.registers[suppressVolume] == 0) {
-            lastState.clear();
-          }
-        }
-        currentDumpSequence->updateState(lastState, curRowIndex);
-        deltaTicksR = currentDumpSequence->addDuration(deltaTicks, deltaTicksR, freq, curRowIndex);
-      }
-      deltaTicks = 0;
-      lastWriteIndex = currentWriteIndex;
-      lastWriteTicks = currentTicks;
-      lastWriteSeconds = currentSeconds;
-    }
-
-    // check if we've changed rows
-    if (NULL == currentDumpSequence || curRowIndex.advance(write.rowIndex.subsong, write.rowIndex.ord, write.rowIndex.row)) {
-      // new sequence
-      String key = getSequenceKey(curRowIndex.subsong, curRowIndex.ord, curRowIndex.row, channel);
-      sequence.emplace_back(key);
-      auto nextIt = registerDumps.emplace(key, ChannelStateSequence());
-      ChannelStateSequence *nextDumpSequence = &(nextIt.first->second);
-      currentDumpSequence = nextDumpSequence;
-    }
-
-    // don't process marker writes
-    if (write.systemIndex < 0) {
-      continue;
-    }
-
-    // process write
-    auto it = addressMap.find(write.addr);
-    if (it == addressMap.end()) {
-      continue;
-    }
-    currentState.write(it->second, write.val);
-  }
-}
-
-void findCommonSequences(
-  const std::map<String, ChannelStateSequence> &registerDumps,
-  std::map<uint64_t, String> &commonDumpSequences,
-  std::map<uint64_t, unsigned int> &frequencyMap,
-  std::map<String, String> &representativeMap
-) {
-  for (auto& x: registerDumps) {
-    uint64_t hash = x.second.hash();
-    auto it = commonDumpSequences.emplace(hash, x.first);
-    if (it.second) {
-      frequencyMap.emplace(hash, 1);
-    } else {
-      frequencyMap[hash] += 1;
-    }
-    representativeMap.emplace(x.first, it.first->second);
-  }
-}
-
-
-
-

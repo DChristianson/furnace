@@ -172,6 +172,11 @@ bool compareStart(SuffixTree * a, SuffixTree * b) {
   return a->start < b->start;
 }
 
+bool compareCodeLength(std::pair<AlphaCode, size_t> &a, std::pair<AlphaCode, size_t> &b) {
+  if (a.second != b.second) return a.second < b.second;
+  return a.first < b.first;
+}
+
 bool compareCodeFrequency(std::pair<AlphaCode, size_t> &a, std::pair<AlphaCode, size_t> &b) {
   if (a.second != b.second) return a.second > b.second;
   return a.first < b.first;
@@ -545,122 +550,4 @@ void translateString(
       alphaSequence.emplace_back(c);
     }
     alphaSequence.emplace_back(0);
-}
-
-void testCommonSubsequences(const String &input) {
-
-  std::vector<String> sequence;
-  std::map<AlphaCode, String> commonDumpSequences;
-  std::map<String, String> representativeMap;
-  for (size_t i = 0; i < input.size(); i++) {
-    char c = input[i];
-    String key = input.substr(i, 1);
-    sequence.emplace_back(key);
-    representativeMap.emplace(key, key);
-    uint64_t hash = (u_int64_t)c;
-    commonDumpSequences.emplace(hash, key);
-  }
-
-  std::vector<AlphaCode> alphabet;
-  std::map<String, AlphaChar> index;
-  createAlphabet(
-    commonDumpSequences,
-    alphabet,
-    index
-  );
-
-  std::vector<AlphaChar> alphaSequence;
-  translateString(
-    sequence,
-    representativeMap,
-    index,
-    alphaSequence
-  );
-
-  SuffixTree *root = createSuffixTree(
-    alphabet,
-    alphaSequence
-  );
-
-  // format
-  std::vector<std::pair<SuffixTree *, int>> stack;
-  stack.emplace_back(std::pair<SuffixTree *, int>(root, 0));
-  while (stack.size() > 0) {
-    auto x = stack.back();
-    stack.pop_back();
-    SuffixTree * u = x.first;
-    int treeDepth = x.second;
-    String indent(treeDepth * 2, ' ');
-    String label = input.substr(u->substring_start(), u->substring_len());
-    for (auto child : u->children) {
-      if (NULL == child) continue;
-      stack.push_back(std::pair<SuffixTree *, int>(child, treeDepth + 1));
-    }
-    logD("%s%s (%d)", indent, label, u->start);
-  }
-
-}
-
-void testCV(const String &input) {
-
-  std::vector<String> sequence;
-  std::map<AlphaCode, String> commonDumpSequences;
-  std::map<String, String> representativeMap;
-  for (size_t i = 0; i < input.size(); i++) {
-    char c = input[i];
-    String key = input.substr(i, 1);
-    sequence.emplace_back(key);
-    representativeMap.emplace(key, key);
-    uint64_t hash = (u_int64_t)c;
-    commonDumpSequences.emplace(hash, key);
-  }
-
-  std::vector<AlphaCode> alphabet;
-  std::map<String, AlphaChar> index;
-  createAlphabet(
-    commonDumpSequences,
-    alphabet,
-    index
-  );
-
-  std::vector<AlphaChar> alphaSequence;
-  translateString(
-    sequence,
-    representativeMap,
-    index,
-    alphaSequence
-  );
-
-  SuffixTree *root = createSuffixTree(
-    alphabet,
-    alphaSequence
-  );
-
-  // format
-  logD("INPUT: %s", input);
-  std::vector<std::pair<SuffixTree *, int>> stack;
-  stack.emplace_back(std::pair<SuffixTree *, int>(root, 0));
-  while (stack.size() > 0) {
-    auto x = stack.back();
-    stack.pop_back();
-    SuffixTree * u = x.first;
-    int treeDepth = x.second;
-    String indent(treeDepth * 2, ' ');
-    String label = input.substr(u->substring_start(), u->substring_len());
-    for (auto child : u->children) {
-      if (NULL == child) continue;
-      stack.push_back(std::pair<SuffixTree *, int>(child, treeDepth + 1));
-    }
-    logD("%s%s (start=%d, cv=%d, depth=%d)", indent, label, u->start, u->substring_start(), u->depth);
-  }
-
-  // compress
-  size_t i = 0;
-  Span s(0, 0, 0, 0);
-  for (i = 0; i < alphaSequence.size(); i++) {
-    root->find_prior(i, alphaSequence, s);
-    String label = input.substr(s.start, s.length);
-    logD("PRIOR %d %s (%d, %d)", i, label, s.start, s.length);
-  }
-
 }

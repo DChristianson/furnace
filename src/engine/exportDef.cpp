@@ -109,17 +109,30 @@ void DivEngine::registerROMExports() {
     false, DIV_REQPOL_ANY
   );
 
-  romExportDefs[DIV_ROM_TIAZIP]=new DivROMExportDef(
-    "Atari 2600/7800 TIAZIP driver", "Dave Christianson",
-    "low-resource driver for use with 2600/7800 BASIC games.\n"
+  romExportDefs[DIV_ROM_BATARI]=new DivROMExportDef(
+    "Atari 2600 BAtari Basic driver", "Dave Christianson",
+    "low resource usage, low compression driver for use with Atari 2600 and 7800 games.\n"
     "",
     "assembly files", ".asm",
+    "batari",
     {
       DIV_SYSTEM_TIA
     },
     true, DIV_REQPOL_EXACT
   );
 
+  romExportDefs[DIV_ROM_TIAZIP]=new DivROMExportDef(
+    "Atari 2600 TIAZIP driver", "Dave Christianson",
+    "medium resource usage, high compression driver for use with Atari 2600 and 7800 games and demos.\n"
+    "",
+    "assembly files", ".asm",
+    "tiazip",
+    {
+      DIV_SYSTEM_TIA
+    },
+    true, DIV_REQPOL_EXACT
+  );
+  
   romExportDefs[DIV_ROM_SAP_R]=new DivROMExportDef(
     "Atari 8-bit SAP-R", "asiekierka",
     "SAP type R export for POKEY songs.\n"

@@ -26,8 +26,10 @@ typedef uint64_t AlphaCode;
 typedef uint64_t SpanCode;
 typedef int AlphaChar;
 
+bool compareCodeLength(std::pair<AlphaCode, size_t> &a, std::pair<AlphaCode, size_t> &b);
 bool compareCodeFrequency(std::pair<AlphaCode, size_t> &a, std::pair<AlphaCode, size_t> &b);
 bool compareIndexFrequency(std::pair<size_t, size_t> &a, std::pair<size_t, size_t> &b);
+
 
 struct Span {
 
@@ -214,11 +216,5 @@ void translateString(
   const std::map<String, AlphaChar> &index,
   std::vector<AlphaChar> &alphaSequence
 );
-
-// debugging code
-void testCommonSubsequences(const String &input);
-
-void testCV(const String &input);
-
 
 #endif // _SUFFIXTREE_H

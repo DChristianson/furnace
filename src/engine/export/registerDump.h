@@ -24,22 +24,9 @@
 
 const int TICKS_PER_SECOND = 1000000;
 
-struct PatternIndex {
-  String key;
-  unsigned short subsong, ord, chan, pat;
-  PatternIndex(
-    const String& k,
-    unsigned short s,
-    unsigned short o,
-    unsigned short c,
-    unsigned short p):
-    key(k),
-    subsong(s),
-    ord(o),
-    chan(c),
-    pat(p) {}
-};
-
+/**
+ * Identifies a row within a song.
+ */
 struct RowIndex {
   unsigned short subsong, ord, row;
   RowIndex(unsigned short s, unsigned short o, unsigned short r):
@@ -65,26 +52,11 @@ struct RowIndex {
   }  
 };
 
-inline auto getSequenceKey(unsigned short subsong, unsigned short ord, unsigned short row, unsigned short channel) {
-  return fmt::sprintf(
-        "SEQ_S%02x_O%02x_R%02x_C%02x",
-         subsong, 
-         ord,
-         row,
-         channel);
-}
-
-inline auto getPatternKey(unsigned short subsong, unsigned short channel, unsigned short pattern) {
-  return fmt::sprintf(
-    "PAT_S%02x_C%02x_P%02x",
-    subsong,
-    channel,
-    pattern
-  );
-}
-
 const size_t CHANNEL_REGISTERS = 4;
 
+/**
+ * Holds an array of register values for pattern recognition purposes
+ */
 struct ChannelState {
 
   unsigned char registers[CHANNEL_REGISTERS];
@@ -264,48 +236,28 @@ struct RegisterWrite {
 /**
  * Extract all register writes in a song.
  */
-void registerDump(
-  DivEngine* e, 
-  int subsong,
-  std::vector<RegisterWrite> &writes
-);
+class RegisterDump {
+public:
 
-/**
- * Extract channel states from register writes.
- */
-void writeChannelStateSequence(
-  const std::vector<RegisterWrite> &writes,
-  int subsong,
-  int channel,
-  int systemIndex,
-  int suppressVolume,
-  const std::map<unsigned int, unsigned int> &addressMap,
-  ChannelStateSequence &dumpSequence 
-);
+  const int subsong;
+  std::vector<RegisterWrite> writes;
 
-/**
- * Extract channel states in a song, keyed on subsong, ord, row and channel.
- */
-void writeChannelStateSequenceByRow(
-  const std::vector<RegisterWrite> &writes,
-  int subsong,
-  int channel,
-  int systemIndex,
-  int suppressVolume,
-  const std::map<unsigned int, unsigned int> &addressMap,
-  std::vector<String> &sequence,
-  std::map<String, ChannelStateSequence> &registerDumps 
-);
+  RegisterDump(
+    DivEngine* e,
+    size_t subsong
+  );
 
-/**
- * Deduplicate channel state sequences by hash code
- */
-void findCommonSequences(
-  const std::map<String, ChannelStateSequence> &registerDumps,
-  std::map<uint64_t, String> &commonSequences,
-  std::map<uint64_t, unsigned int> &frequencyMap,
-  std::map<String, String> &representativeMap
-);
+  /**
+   * Extract channel states from register writes.
+   */
+  void writeChannelStateSequence(
+    int channel,
+    int systemIndex,
+    int suppressVolume,
+    const std::map<unsigned int, unsigned int> &addressMap,
+    ChannelStateSequence &dumpSequence 
+  );
 
+};
 
 #endif // _REGISTERDUMP_H

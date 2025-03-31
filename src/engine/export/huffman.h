@@ -21,8 +21,10 @@
 #define _HUFFMAN_H
 
 #include "suffixTree.h"
-#include "../../ta-log.h"
 
+/**
+ * Helper class for writing bitstreams
+ */
 class Bitstream {
 private:
   
@@ -34,7 +36,6 @@ private:
 public:
 
   Bitstream(size_t capacity) : capacity(capacity), pos(0), endPos(0) {
-    logD("new bitstream %d", capacity);
     size_t elements = capacity / 64;
     if (capacity % 64 > 0) {
       elements++;
@@ -43,7 +44,6 @@ public:
   }
 
   ~Bitstream() {
-    logD("deleting bitstream %d", capacity);
     if (buffer != NULL) {
       delete(buffer);
     }
@@ -92,11 +92,14 @@ public:
 
 };
 
+/**
+ * Huffman code tree. Used to build a optimal encoding of an arbitrary set of codes based on their
+ * relative frequencies.
+ */
 struct HuffmanTree {
 
   AlphaCode code;
   size_t weight;
-  size_t depth;
 
   HuffmanTree *parent;
   HuffmanTree *left;
@@ -105,7 +108,6 @@ struct HuffmanTree {
   HuffmanTree(AlphaCode c, size_t weight) : 
     code(c),
     weight(weight),
-    depth(0),
     parent(NULL),
     left(NULL),
     right(NULL) {}
@@ -120,8 +122,14 @@ struct HuffmanTree {
     left->parent = this;
     assert(right->parent == NULL);
     right->parent = this;
-    depth = 1 + (left->depth > right->depth ? left->depth : right->depth);
   }
+
+  HuffmanTree() : 
+    code(0),
+    weight(0),
+    parent(NULL),
+    left(NULL),
+    right(NULL) {}
 
   ~HuffmanTree() {
     if (left != NULL) {
@@ -129,6 +137,42 @@ struct HuffmanTree {
     }
     if (right != NULL) {
       delete(right);
+    }
+  }
+
+  void setLeft(HuffmanTree *tree) {
+    assert(code == 0);
+    assert(tree != NULL);
+    assert(left == NULL);
+    left = tree;
+    tree->parent = this;
+    updateWeights();
+  }
+
+  void setRight(HuffmanTree *tree) {
+    assert(code == 0);
+    assert(tree != NULL);
+    assert(right == NULL);
+    right = tree;
+    tree->parent = this;
+    updateWeights();
+  }
+
+  void setCode(AlphaCode c, size_t w) {
+    assert(code == 0);
+    assert(left == NULL);
+    assert(right == NULL);
+    code = c;
+    weight = w;
+  }
+
+  void updateWeights() {
+    HuffmanTree *current = this;
+    while (current != NULL) {
+      current->weight = 
+        (current->left ? current->left->weight : 0) +
+        (current->right ? current->right->weight : 0);
+      current = current->parent;
     }
   }
 
@@ -154,7 +198,25 @@ struct HuffmanTree {
     }
   }
 
+  size_t height() {
+    size_t height = 0;
+    HuffmanTree *current = this;
+    while (current->parent != NULL) {
+      height++;
+      current = current->parent;
+    }
+    return height;
+  }
+
+  /**
+   * Convert a tree to a map of symbol -> corresponding code
+   */
   void buildIndex(std::map<AlphaCode, std::vector<bool>> &index);
+
+  /**
+   * Convert a tree to canonical form.
+   */
+  void buildCanonicalCodebook(std::vector<std::pair<AlphaCode, size_t>> &codebook);
 
 };
 
@@ -169,6 +231,16 @@ class CompareHuffmanTreeWeights {
 
 };
 
-HuffmanTree *buildHuffmanTree(const std::map<AlphaCode, size_t> &frequencyMap, size_t limit, size_t minWeight, AlphaCode literal);
+HuffmanTree *buildHuffmanTreeFromCodebook(
+  const std::vector<std::pair<AlphaCode, size_t>> &codebook
+);
+
+HuffmanTree *buildHuffmanTree(
+  const std::map<AlphaCode, size_t> &frequencyMap,
+  size_t limit,
+  size_t minWeight,
+  AlphaCode literal,
+  std::vector<std::pair<AlphaCode, size_t>> &codebook
+);
 
 #endif // _HUFFMAN_H

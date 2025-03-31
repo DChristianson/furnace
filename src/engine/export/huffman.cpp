@@ -96,45 +96,6 @@ void Bitstream::writeBits(size_t value, unsigned char bits) {
   }
 }
 
-HuffmanTree *buildHuffmanTree(const std::map<AlphaCode, size_t> &frequencyMap, size_t limit, size_t minWeight, AlphaCode literal) {
-
-    std::priority_queue<HuffmanTree *, std::vector<HuffmanTree *>, CompareHuffmanTreeWeights> heap;
-
-    size_t literal_weight = 0;
-    for (auto &x:frequencyMap) {
-      if (x.second < minWeight) {
-        literal_weight += 1;
-        continue;
-      }
-      HuffmanTree *node = new HuffmanTree(x.first, x.second);
-      heap.emplace(node);
-    }
-
-    while (heap.size() > limit) {
-      auto node = heap.top();
-      heap.pop();
-      literal_weight += node->weight;
-      delete node;
-    }
-
-    if (literal_weight > 0) {
-      HuffmanTree *node = new HuffmanTree(literal, literal_weight);
-      heap.emplace(node);
-    }
-
-    while (heap.size() > 1) {
-      auto left = heap.top();
-      heap.pop();
-      auto right = heap.top();
-      heap.pop();
-      HuffmanTree *node = new HuffmanTree(left, right);
-      heap.emplace(node);
-    }
-
-    return heap.top();
-    
-}
-
 void HuffmanTree::buildIndex(std::map<AlphaCode, std::vector<bool>> &index) {
   std::vector<HuffmanTree *> stack;
   stack.emplace_back(this);
@@ -152,5 +113,105 @@ void HuffmanTree::buildIndex(std::map<AlphaCode, std::vector<bool>> &index) {
       }
     }
   }
+}
 
+void HuffmanTree::buildCanonicalCodebook(std::vector<std::pair<AlphaCode, size_t>> &codeLengths) {
+  std::vector<HuffmanTree *> stack;
+  stack.emplace_back(this);
+  while (stack.size() > 0) {
+    HuffmanTree *n = stack.back();
+    stack.pop_back();
+    if (n->isLeaf()) {
+      codeLengths.push_back(std::pair<AlphaCode, int>(n->code, n->height()));
+    } else {
+      if (n->left != NULL) {
+        stack.push_back(n->left);
+      }
+      if (n->right != NULL) {
+        stack.push_back(n->right);
+      }
+    }
+  }
+  std::sort(codeLengths.begin(), codeLengths.end(), compareCodeLength);
+}
+
+HuffmanTree *buildHuffmanTree(
+  const std::map<AlphaCode, size_t> &frequencyMap,
+  size_t limit,
+  size_t minWeight,
+  AlphaCode literal,
+  std::vector<std::pair<AlphaCode, size_t>> &codebook
+) {
+
+  std::priority_queue<HuffmanTree *, std::vector<HuffmanTree *>, CompareHuffmanTreeWeights> heap;
+
+  size_t literal_weight = 0;
+  for (auto &x:frequencyMap) {
+    if (x.second < minWeight) {
+      literal_weight += 1;
+      continue;
+    }
+    HuffmanTree *node = new HuffmanTree(x.first, x.second);
+    heap.emplace(node);
+  }
+
+  while (heap.size() > limit) {
+    auto node = heap.top();
+    heap.pop();
+    literal_weight += node->weight;
+    delete node;
+  }
+
+  if (literal_weight > 0) {
+    HuffmanTree *node = new HuffmanTree(literal, literal_weight);
+    heap.emplace(node);
+  }
+
+  while (heap.size() > 1) {
+    auto left = heap.top();
+    heap.pop();
+    auto right = heap.top();
+    heap.pop();
+    HuffmanTree *node = new HuffmanTree(left, right);
+    heap.emplace(node);
+  }
+
+  HuffmanTree* initialTree = heap.top();
+  initialTree->buildCanonicalCodebook(codebook);
+  delete initialTree;
+  HuffmanTree* canonicalTree = buildHuffmanTreeFromCodebook(codebook);
+  return canonicalTree;
+}
+
+HuffmanTree *buildHuffmanTreeFromCodebook(const std::vector<std::pair<AlphaCode, size_t>> &codeLengths) {
+  size_t codeLength = 0;
+  size_t currentCode = SIZE_MAX;
+  HuffmanTree* canonicalTree = new HuffmanTree();
+  for (auto &p : codeLengths) {
+    currentCode += 1;
+    if (p.second > codeLength) {
+      currentCode = currentCode << (p.second - codeLength);
+      codeLength = p.second;
+    }
+    HuffmanTree* current = canonicalTree;
+    size_t mask = 1 << (codeLength - 1);
+    while (mask) {
+      if (mask & currentCode) {
+        if (current->left == NULL) {
+          HuffmanTree* leftBranch = new HuffmanTree();
+          current->setLeft(leftBranch);
+        }
+        current = current->left;
+      } else {
+        if (current->right == NULL) {
+          HuffmanTree* rightBranch = new HuffmanTree();
+          current->setRight(rightBranch);
+        }
+        current = current->right;
+      }
+      mask = mask >> 1;
+    }
+    current->setCode(p.first, 0);
+  }
+  return canonicalTree;
 }

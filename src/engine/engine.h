@@ -583,7 +583,8 @@ class DivEngine {
   friend class DivExportAmigaValidation;
   friend class DivExportSAPR;
   friend class DivExportTiuna;
-  friend class DivExportAtari2600;
+  friend class DivExportTIAZip;
+  friend class DivExportBatari;
   friend class DivExportZSM;
   friend class DivExportiPod;
   friend class DivExportGRUB;

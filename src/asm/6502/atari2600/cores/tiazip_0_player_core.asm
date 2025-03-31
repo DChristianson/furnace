@@ -1,3 +1,7 @@
+; TIAZIP 0
+; Compact coded audio data with no track compression
+;
+
     MAC AUDIO_VARS
 audio_data_ptr             ; audio register data
 audio_data_0_ptr    ds 2   ; channel 0
@@ -91,7 +95,7 @@ _set_all_registers
             rol audio_timer,x          ; set new timer to 0 or 1 depending on carry bit
             jsr audio_data_advance
             lda (audio_data_ptr,x)     ; ccccvvvv|
-            sta audio_vx,y            ; store volume
+            sta audio_vx,y             ; store volume
             lsr                        ; 0ccccvvv|
             lsr                        ; 00ccccvv|
             lsr                        ; 000ccccv|

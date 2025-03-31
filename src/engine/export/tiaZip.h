@@ -17,60 +17,31 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef _ATARI2600_EXPORT_H
-#define _ATARI2600_EXPORT_H
+#ifndef _TIAZIP_EXPORT_H
+#define _TIAZIP_EXPORT_H
 
 #include "../engine.h"
 #include "registerDump.h"
 #include "suffixTree.h"
 #include "huffman.h"
 
-enum DivExportTIAFormat {
-  DIV_EXPORT_TIA_RAW,       // raw data export - no driver support 
-  DIV_EXPORT_TIA_BASIC,     // simple 2 channel sound driver
-  DIV_EXPORT_TIA_BASIC_RLE, // simple 2 channel sound driver with duration
-  DIV_EXPORT_TIA_TIACOMP,   // compact register encoding without compression
-  DIV_EXPORT_TIA_TIAZIP,    // dynamically coded LZ sequence compression
-  DIV_EXPORT_TIA_FSEQ,      // Furnace sequence pattern (DEPRECATED)
-};
+const int AUDC0 = 0x15;
+const int AUDC1 = 0x16;
+const int AUDF0 = 0x17;
+const int AUDF1 = 0x18;
+const int AUDV0 = 0x19;
+const int AUDV1 = 0x1A;
 
-class DivExportAtari2600 : public DivROMExport {
+class DivExportTIAZip : public DivROMExport {
 
   DivEngine* e;
+  std::vector<RegisterDump*> registerDumps;
   std::thread* exportThread;
   DivROMExportProgress progress[2];
   bool running, failed, mustAbort;
 
-  // dump all register writes
-  void writeRegisterDump(
-    std::vector<RegisterWrite> (*registerWrites)
-  );
-
-  //
-  // basic uncompressed (raw) encoding
-  // 3-4 bytes per channel
-  //
-  //  AUDCx, AUDFx, AUDVx [, duration]
-  //  AUDCx, AUDFx, AUDVx [, duration]
-  //  AUDCx, AUDFx, AUDVx [, duration]
-  //  ...
-  //
-  void writeTrackDataRaw(
-    bool encodeDuration,
-    std::vector<RegisterWrite> (*registerWrites)
-  );
-
-  // 
-  // simple encoding suitable for sound effects and
-  // short game music sequences
-  //
-  // 2 bytes per channel
-  // 
-  void writeTrackDataBasic(
-    bool encodeDuration,
-    bool independentChannelPlayback,
-    std::vector<RegisterWrite> (*registerWrites)
-  );
+  // debugging
+  void writeRegisterDumps();
 
   // 
   // compact encoding suitable for sound effects and
@@ -78,37 +49,14 @@ class DivExportAtari2600 : public DivROMExport {
   //
   // 2 bytes per channel
   // 
-  void writeTrackDataTIAComp(
-    std::vector<RegisterWrite> (*registerWrites)
-  );
+  void writeTrackDataTIAComp();
 
   //
   // LZ-type encoding 
   // compressed sequences
   //
-  void writeTrackDataTIAZip(
-    const std::vector<RegisterWrite> (*registerWrites),
-    bool shallowCompression,
-    bool fixedCodes
-  );
+  void writeTrackDataTIAZip();
 
-  //
-  // Sequenced encoding 
-  // uncompressed sequences
-  //
-  void writeTrackDataFSeq(
-    std::vector<RegisterWrite> *registerWrites
-  );
-
-  void compressCodeSequence(
-    int subsong,
-    int channel,
-    const std::vector<AlphaCode> &alphabet,
-    const std::map<AlphaCode, AlphaChar> &index,
-    const std::vector<AlphaCode>&codeSequence,
-    std::vector<AlphaCode> &compressedCodeSequence,
-    std::vector<AlphaCode> &spanSequence
-  );
   
   void encodeBitstreamDynamic(
     const std::vector<AlphaCode> (*codeSequences)[2],
@@ -118,10 +66,20 @@ class DivExportAtari2600 : public DivROMExport {
     size_t blockSize
   );
 
-  void validateCodeSequence(
-    int subsong,
+  void compressCodeSequence(
+    size_t subsong,
     int channel,
+    const std::vector<AlphaCode> &alphabet,
+    const std::map<AlphaCode, AlphaChar> &index,
     const std::vector<AlphaCode>&codeSequence,
+    std::vector<AlphaCode> &compressedCodeSequence,
+    std::vector<AlphaCode> &spanSequence
+  );
+
+  void validateCodeSequence(
+    size_t subsong,
+    int channel,
+    const std::vector<AlphaCode> &codeSequence,
     const std::vector<AlphaCode> &compressedCodeSequence,
     const std::vector<AlphaCode> &spanSequence
   );
@@ -143,13 +101,13 @@ class DivExportAtari2600 : public DivROMExport {
 
   size_t writeTextGraphics(SafeWriter* w, const char* value);
   void writeWaveformHeader(SafeWriter* w, const char* key);
-  size_t writeDynamicCodes(SafeWriter* w, const char *label, const HuffmanTree *codeTree);
+  size_t writeCodebook(SafeWriter* w, const char *label, const std::vector<std::pair<AlphaCode, size_t>> &codebook);
 
   void run();
 
 public:
 
-  ~DivExportAtari2600() {}
+  ~DivExportTIAZip();
 
   bool go(DivEngine* eng) override;
   bool isRunning() override;
@@ -160,4 +118,4 @@ public:
 
 };
 
-#endif // _ATARI2600_EXPORT_H
+#endif // _TIAZIP_EXPORT_H

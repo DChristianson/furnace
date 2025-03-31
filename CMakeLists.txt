@@ -891,7 +891,8 @@ src/engine/export/abstract.cpp
 src/engine/export/amigaValidation.cpp
 src/engine/export/sapr.cpp
 src/engine/export/tiuna.cpp
-src/engine/export/atari2600Export.cpp
+src/engine/export/batariBasic.cpp
+src/engine/export/tiaZip.cpp
 src/engine/export/registerDump.cpp
 src/engine/export/suffixTree.cpp
 src/engine/export/huffman.cpp

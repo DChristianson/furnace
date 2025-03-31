@@ -458,6 +458,58 @@ void FurnaceGUI::drawExportROM(bool onWindow) {
       }
       break;
     }
+    case DIV_ROM_BATARI_BASIC: {
+      bool encodeDuration=romConfig.getBool("encodeDuration",-1);
+      bool b = ImGui::RadioButton("Encode Duration", encodeDuration);
+      if (b != encodeDuration) {
+        encodeDuration=b;
+        altered=true;
+      }
+      if (altered) {
+        romConfig.set("encodeDuration",encodeDuration);
+      }
+      break;
+    }
+    case DIV_ROM_TIAZIP: {
+      String asmBaseLabel=romConfig.getString("baseLabel","song");
+      int firstBankSize=romConfig.getInt("firstBankSize",3072);
+      int otherBankSize=romConfig.getInt("otherBankSize",4096-48);
+      int sysToExport=romConfig.getInt("sysToExport",-1);
+
+      // TODO; validate label
+      if (ImGui::InputText(_("base song label name"),&asmBaseLabel)) {
+        altered=true;
+      }
+      if (ImGui::InputInt(_("max size in first bank"),&firstBankSize,1,100)) {
+        if (firstBankSize<0) firstBankSize=0;
+        if (firstBankSize>4096) firstBankSize=4096;
+        altered=true;
+      }
+      if (ImGui::InputInt(_("max size in other banks"),&otherBankSize,1,100)) {
+        if (otherBankSize<16) otherBankSize=16;
+        if (otherBankSize>4096) otherBankSize=4096;
+        altered=true;
+      }
+      
+      ImGui::Text(_("chip to export:"));
+      for (int i=0; i<e->song.systemLen; i++) {
+        DivSystem sys=e->song.system[i];
+        bool isTIA=(sys==DIV_SYSTEM_TIA);
+        ImGui::BeginDisabled(!isTIA);
+        if (ImGui::RadioButton(fmt::sprintf("%d. %s##_SYSV%d",i+1,getSystemName(e->song.system[i]),i).c_str(),sysToExport==i)) {
+          sysToExport=i;
+          altered=true;
+        }
+        ImGui::EndDisabled();
+      }
+      if (altered) {
+        romConfig.set("baseLabel",asmBaseLabel);
+        romConfig.set("firstBankSize",firstBankSize);
+        romConfig.set("otherBankSize",otherBankSize);
+        romConfig.set("sysToExport",sysToExport);
+      }
+      break;
+    }
     case DIV_ROM_ZSM: {
       int zsmExportTickRate=romConfig.getInt("zsmrate",60);
       bool zsmExportLoop=romConfig.getBool("loop",true);
