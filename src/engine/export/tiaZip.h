@@ -99,6 +99,11 @@ class DivExportTIAZip : public DivROMExport {
     std::vector<AlphaCode> &out
   );
 
+  size_t compileCommands(
+    const HuffmanTree *tree,
+    SafeWriter *w
+  );
+
   size_t writeTextGraphics(SafeWriter* w, const char* value);
   void writeWaveformHeader(SafeWriter* w, const char* key);
   size_t writeCodebook(SafeWriter* w, const char *label, const std::vector<std::pair<AlphaCode, size_t>> &codebook);
