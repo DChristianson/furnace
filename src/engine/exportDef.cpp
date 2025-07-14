@@ -132,7 +132,7 @@ void DivEngine::registerROMExports() {
     },
     true, DIV_REQPOL_EXACT
   );
-  
+
   romExportDefs[DIV_ROM_SAP_R]=new DivROMExportDef(
     "Atari 8-bit SAP-R", "asiekierka",
     "SAP type R export for POKEY songs.\n"
@@ -154,6 +154,7 @@ void DivEngine::registerROMExports() {
     "for playback, you can drag the resulting file\n"
     "into iPod_Control/Tones to your iPod IN DISK MODE",
     "alarm tone files", ".tone",
+    "ipod",
     {
       DIV_SYSTEM_PCSPKR
     },
@@ -165,6 +166,7 @@ void DivEngine::registerROMExports() {
     "GRUB_INIT_TUNE export\n"
     "for use with the GRUB bootloader using the \"play\" command",
     "Text/Binary files", NULL,
+    "grub",
     {
       DIV_SYSTEM_PCSPKR
     },

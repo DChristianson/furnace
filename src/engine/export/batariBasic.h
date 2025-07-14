@@ -22,7 +22,7 @@
 
 #include "../engine.h"
 
-class DivExportBatariBasic: public DivROMExport {
+class DivExportBatari: public DivROMExport {
 
   DivEngine* e;
   std::thread* exportThread;
@@ -44,7 +44,7 @@ class DivExportBatariBasic: public DivROMExport {
 
 public:
 
-  ~DivExportBatariBasic() {}
+  ~DivExportBatari() {}
 
   bool go(DivEngine* eng) override;
   bool isRunning() override;

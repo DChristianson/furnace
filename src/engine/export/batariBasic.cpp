@@ -35,7 +35,7 @@ static const std::map<unsigned int, unsigned int> batariChannel1AddressMap = {
   {AUDV1, 2},
 };
 
-bool DivExportBatariBasic::go(DivEngine* eng) {
+bool DivExportBatari::go(DivEngine* eng) {
   progress[0].name = "Export";
   progress[0].amount = 0.0f;
 
@@ -43,35 +43,35 @@ bool DivExportBatariBasic::go(DivEngine* eng) {
   running = true;
   failed = false;
   mustAbort = false;
-  exportThread = new std::thread(&DivExportBatariBasic::run, this);
+  exportThread = new std::thread(&DivExportBatari::run, this);
   return true;
 }
 
-void DivExportBatariBasic::wait() {
+void DivExportBatari::wait() {
   if (exportThread!=NULL) {
     exportThread->join();
     delete exportThread;
   }
 }
 
-void DivExportBatariBasic::abort() {
+void DivExportBatari::abort() {
   mustAbort=true;
   wait();
 }
 
-bool DivExportBatariBasic::isRunning() {
+bool DivExportBatari::isRunning() {
   return running;
 }
 
-bool DivExportBatariBasic::hasFailed() {
+bool DivExportBatari::hasFailed() {
   return failed;
 }
 
-DivROMExportProgress DivExportBatariBasic::getProgress(int index) {
+DivROMExportProgress DivExportBatari::getProgress(int index) {
   return progress[0];
 }
 
-void DivExportBatariBasic::run() {
+void DivExportBatari::run() {
 
   bool encodeDuration = conf.getBool("encodeDuration", true);
 
@@ -103,7 +103,7 @@ void DivExportBatariBasic::run() {
 
 
 // simple register dump with separate tables for frequency and control / volume
-void DivExportBatariBasic::writeTrackDataBasic(
+void DivExportBatari::writeTrackDataBasic(
   bool encodeDuration,
   bool independentChannelPlayback
 ) {

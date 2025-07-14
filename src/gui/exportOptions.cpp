@@ -458,7 +458,7 @@ void FurnaceGUI::drawExportROM(bool onWindow) {
       }
       break;
     }
-    case DIV_ROM_BATARI_BASIC: {
+    case DIV_ROM_BATARI: {
       bool encodeDuration=romConfig.getBool("encodeDuration",-1);
       bool b = ImGui::RadioButton("Encode Duration", encodeDuration);
       if (b != encodeDuration) {

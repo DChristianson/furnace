@@ -1843,26 +1843,26 @@ size_t DivExportTIAZip::compileCommands(
   const HuffmanTree *tree,
   SafeWriter *w
 ) {
-  std::vector<HuffmanTree *> stack;
+  std::vector<const HuffmanTree *> stack;
   stack.emplace_back(tree);
   while (stack.size() > 0) {
-    HuffmanTree *n = stack.back();
+    const HuffmanTree *n = stack.back();
     stack.pop_back();
-    w->writeText("    %s", CODE_PATH(n));
-    if (n->isLeaf()) {
-      w->writeText("    EXEC_%s\n", CODE_TEXT(n->code));
-    } else {
-      w->writeText("    READ_BIT\n");
-      if (n->left != NULL) {
-        stack.push_back(n->left);
-        if (n->right != NULL) {
-          w->writeText("    bcc %s\n", CODE_PATH(n->right));
-        }
-      }
-      if (n->right != NULL) {
-        stack.push_back(n->right);
-      }
-    }
+    // w->writeText("    %s", CODE_PATH(n));
+    // if (n->isLeaf()) {
+    //   w->writeText("    EXEC_%s\n", CODE_TEXT(n->code));
+    // } else {
+    //   w->writeText("    READ_BIT\n");
+    //   if (n->left != NULL) {
+    //     stack.push_back(n->left);
+    //     if (n->right != NULL) {
+    //       w->writeText("    bcc %s\n", CODE_PATH(n->right));
+    //     }
+    //   }
+    //   if (n->right != NULL) {
+    //     stack.push_back(n->right);
+    //   }
+    // }
   }
 }
 
