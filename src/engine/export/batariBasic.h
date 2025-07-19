@@ -21,30 +21,51 @@
 #define _BATARI_BASIC_EXPORT_H
 
 #include "../engine.h"
+#include "registerDump.h"
 
 class DivExportBatari: public DivROMExport {
 
   DivEngine* e;
+  std::vector<RegisterDump*> registerDumps;
   std::thread* exportThread;
   DivROMExportProgress progress[2];
   bool running, failed, mustAbort;
 
   // 
   // simple encoding suitable for sound effects and
-  // short game music sequences
+  // short game music sequences with low RAM
   //
   // 2 bytes per channel
   // 
   void writeTrackDataBasic(
     bool encodeDuration,
-    bool independentChannelPlayback
+    bool independentChannelPlayback,
+    int addressBits
+  );
+
+  // 
+  // compact delta encoding suitable for longer sequences
+  // also using low RAM
+  //
+  // 2 bytes per channel
+  // 
+  void writeTrackDataTIAComp(
+    int addressBits
+  );
+
+  int encodeChannelState(
+    const ChannelState& next,
+    const char duration,
+    const ChannelState& last,
+    bool encodeRemainder,
+    std::vector<unsigned char> &out
   );
 
   void run();
 
 public:
 
-  ~DivExportBatari() {}
+  ~DivExportBatari();
 
   bool go(DivEngine* eng) override;
   bool isRunning() override;

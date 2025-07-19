@@ -40,9 +40,6 @@ class DivExportTIAZip : public DivROMExport {
   DivROMExportProgress progress[2];
   bool running, failed, mustAbort;
 
-  // debugging
-  void writeRegisterDumps();
-
   // 
   // compact encoding suitable for sound effects and
   // short game music sequences
@@ -84,14 +81,6 @@ class DivExportTIAZip : public DivROMExport {
     const std::vector<AlphaCode> &spanSequence
   );
 
-  int encodeChannelState(
-    const ChannelState& next,
-    const char duration,
-    const ChannelState& last,
-    bool encodeRemainder,
-    std::vector<unsigned char> &out
-  );
-
   size_t encodeChannelStateCodes(
     const ChannelState& next,
     const char duration,
@@ -104,7 +93,6 @@ class DivExportTIAZip : public DivROMExport {
     SafeWriter *w
   );
 
-  size_t writeTextGraphics(SafeWriter* w, const char* value);
   void writeWaveformHeader(SafeWriter* w, const char* key);
   size_t writeCodebook(SafeWriter* w, const char *label, const std::vector<std::pair<AlphaCode, size_t>> &codebook);
 

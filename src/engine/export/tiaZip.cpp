@@ -211,7 +211,6 @@ DivROMExportProgress DivExportTIAZip::getProgress(int index) {
 
 void DivExportTIAZip::run() {
 
-  int compressionLevel = conf.getInt("compressionLevel", 1);
   bool debugRegisterDump = conf.getBool("debug", false);
 
   // create register dumps
@@ -219,16 +218,18 @@ void DivExportTIAZip::run() {
     registerDumps.push_back(new RegisterDump(e, subsong));
   }
 
-  if (debugRegisterDump) {
-    writeRegisterDumps();
+    if (debugRegisterDump) {
+    // dump all register writes
+    SafeWriter* dump = new SafeWriter;
+    dump->init();
+    dump->writeText(fmt::sprintf("; Song: %s\n", e->song.name));
+    dump->writeText(fmt::sprintf("; Author: %s\n", e->song.author));
+    writeRegisterDumps(dump, registerDumps);
+    output.push_back(DivROMExportOutput("RegisterDump.txt", dump));
   }
 
   // write track data
-  if (compressionLevel == 0) {
-    writeTrackDataTIAComp();
-  } else {
-    writeTrackDataTIAZip();
-  }
+  writeTrackDataTIAZip();
 
   // create meta data (optional)
   logD("writing track title graphics");
@@ -252,149 +253,6 @@ void DivExportTIAZip::run() {
   writeTextGraphics(titleData, title.c_str());
   output.push_back(DivROMExportOutput("Track_meta.asm", titleData));
   running = false;
-}
-
-void DivExportTIAZip::writeRegisterDumps() {
-
-  // dump all register writes
-  SafeWriter* dump = new SafeWriter;
-  dump->init();
-  dump->writeText(fmt::sprintf("; Song: %s\n", e->song.name));
-  dump->writeText(fmt::sprintf("; Author: %s\n", e->song.author));
-
-  for (size_t subsong = 0; subsong < registerDumps.size(); subsong++) {
-    int maxFrames = 0;
-
-    dump->writeText(fmt::sprintf("\n; Song %d\n", subsong));
-    auto registerDump = registerDumps[subsong];
-    for (auto &write : registerDump->writes) {
-
-      int currentTicks = write.ticks;
-      int currentSeconds = write.seconds;
-      int freq = ((float)TICKS_PER_SECOND) / write.hz;
-
-      int totalTicks = currentTicks  + 
-        (TICKS_PER_SECOND * currentSeconds);
-      int totalFrames = totalTicks / freq;
-      int totalFramesR = totalTicks - (totalFrames * freq);
-      if (totalFrames > maxFrames) {
-        maxFrames = totalFrames;
-      }
-
-      dump->writeText(fmt::sprintf("; %d T%d.%d H%f F%d.%d: SS%d ORD%d ROW%d SYS%d> %d = %d\n",
-        write.writeIndex,
-        write.seconds,
-        write.ticks,
-        write.hz,
-        totalFrames,
-        totalFramesR,
-        write.rowIndex.subsong,
-        write.rowIndex.ord,
-        write.rowIndex.row,
-        write.systemIndex,
-        write.addr,
-        write.val
-      ));
-    }
-
-    dump->writeText("\n");
-    dump->writeText(fmt::sprintf("; Writes: %d\n", registerDump->writes.size()));
-    dump->writeText(fmt::sprintf("; Frames: %d\n", maxFrames));
-    dump->writeText("\n");
-
-  }
-
-  output.push_back(DivROMExportOutput("RegisterDump.txt", dump));
-
-}
-
-// Compact delta encoding
-void DivExportTIAZip::writeTrackDataTIAComp() {
-
-  // write track audio data
-  SafeWriter* trackData = new SafeWriter;
-  trackData->init();
-  trackData->writeText("; Furnace Tracker audio data file\n");
-  trackData->writeText("; TIAComp delta encoding\n");
-  trackData->writeText(fmt::sprintf("; Song: %s\n", e->song.name));
-  trackData->writeText(fmt::sprintf("; Author: %s\n", e->song.author));
-
-  trackData->writeText(fmt::sprintf("\nAUDIO_NUM_TRACKS = %d\n", registerDumps.size()));
-  
-  trackData->writeText("\n#include \"cores/tiacomp_player_core.asm\"\n");
-
-  // create a lookup table for use in player apps
-  size_t songDataSize = 0;
-  // one track table per channel
-  for (int channel = 0; channel < 2; channel++) {
-    trackData->writeText(fmt::sprintf("AUDIO_TRACKS_%d:\n", channel));
-    for (size_t subsong = 0; subsong < registerDumps.size(); subsong++) {
-      trackData->writeText(fmt::sprintf("    byte AUDIO_TRACK_%d_%d\n", subsong, channel));
-      songDataSize += 1;
-    }
-  }
-
-  // dump sequences
-  size_t trackDataSize = 0;
-  trackData->writeText("AUDIO_DATA:\n");
-  for (size_t subsong = 0; subsong < registerDumps.size(); subsong++) {
-    auto registerDump = registerDumps[subsong];
-    for (int channel = 0; channel < 2; channel++) {
-      ChannelStateSequence dumpSequence;
-      registerDump->writeChannelStateSequence(
-        channel,
-        0,
-        -1,
-        channel == 0 ? tiaZipChannel0AddressMap : tiaZipChannel1AddressMap,
-        dumpSequence
-      );
-      trackData->writeText(fmt::sprintf("AUDIO_TRACK_%d_%d = . - AUDIO_DATA + 1\n", subsong, channel));
-      ChannelState last(dumpSequence.initialState);
-      std::vector<unsigned char> codeSeq;
-      for (auto& n: dumpSequence.intervals) {
-        codeSeq.clear();
-        trackData->writeText(
-          fmt::sprintf(
-            "    ;F%d C%d V%d D%d - SS:%d O:%d R:%d\n",
-            n.state.registers[1],
-            n.state.registers[0],
-            n.state.registers[2],
-            n.duration,
-            n.row.subsong,
-            n.row.ord,
-            n.row.row
-          )
-        );
-        encodeChannelState(n.state, n.duration, last, true, codeSeq);
-        trackDataSize += codeSeq.size();
-        trackData->writeText("    byte ");
-        for (size_t i = 0; i < codeSeq.size(); i++) {
-          if (i > 0) {
-            trackData->writeC(',');
-          }
-          trackData->writeText(fmt::sprintf("%d", codeSeq[i]));
-        }
-        trackData->writeC('\n');
-        if (0 == n.state.registers[2]) {
-          last.registers[2] = 0;
-        } else {
-          last = n.state;
-        }
-      }
-      trackData->writeText("    byte 0\n");
-      trackDataSize++;
-    }
-  }
-
-  trackData->writeC('\n');
-  trackData->writeText(fmt::sprintf("; Num Tracks %d\n", registerDumps.size()));
-  trackData->writeText(fmt::sprintf("; Track Table Size %d\n", songDataSize));
-  trackData->writeText(fmt::sprintf("; Data Table Size %d\n", trackDataSize));
-  size_t totalDataSize = songDataSize + trackDataSize;
-  trackData->writeText(fmt::sprintf("; Total Data Size %d\n", totalDataSize));
-
-  output.push_back(DivROMExportOutput("Track_data.asm", trackData));
-
 }
 
 /**
@@ -1866,130 +1724,6 @@ size_t DivExportTIAZip::compileCommands(
   }
 }
 
-
-/**
- *  Write note data. Format 0:
- * 
- *   fffff010 ccccvvvv           frequency + control + volume, duration 1
- *   fffff110 ccccvvvv           " " ", duration 2
- *   ddddd100                    sustain d+1 frames
- *   ddddd000                    pause d frames
- *   xxxx0001                    volume = x >> 4, duration 1 
- *   xxxx1001                    volume = x >> 4, duration 2
- *   xxxx0101                    control = x >> 4, duration 1
- *   xxxx1101                    control = x >> 4, duration 2
- *   xxxxx011                    frequency = x >> 3, duration 1
- *   xxxxx111                    frequency = x >> 3, duration 2
- *   00000000                    stop
- */
-int DivExportTIAZip::encodeChannelState(
-  const ChannelState& next,
-  const char duration,
-  const ChannelState& last,
-  bool encodeRemainder,
-  std::vector<unsigned char> &out)
-{
-  // when duration is zero... some kind of rounding issue has happened upstream... we force to 1...
-  if (duration == 0) {
-      logD("0 duration note");
-  }
-  int framecount = duration > 0 ? duration : 1; 
-
-  unsigned char audfx, audcx, audvx;
-  int cc, fc, vc;
-  audcx = next.registers[0];
-  cc = audcx != last.registers[0];
-  audfx = next.registers[1];
-  fc = audfx != last.registers[1];
-  audvx = next.registers[2];
-  vc = audvx != last.registers[2];
-  int delta = (cc + fc + vc);
-  
-  if (audvx == 0 && delta != 0) {
-    // volume is zero, pause
-    unsigned char dmod;
-    if (framecount > 32) {
-      dmod = 31;
-      framecount -= 32;
-    } else {
-      dmod = framecount - 1;
-      framecount = 0;
-    }
-    unsigned char rx = (dmod > 0) ? dmod << 3 : 0x01; 
-    //w->writeText(fmt::sprintf("    byte %d; PAUSE %d\n", rx, dmod));
-    out.emplace_back(rx);
-    
-  } else if ( delta == 1 ) {
-    // write a delta row - only change one register
-    unsigned char dmod;
-    if (framecount > 2) {
-      dmod = 1;
-      framecount -= 2;
-    } else {
-      dmod = framecount - 1;
-      framecount = 0;
-    }
-
-    unsigned char rx;
-    if (fc > 0) {
-      // frequency
-      rx = audfx << 3 | dmod << 2 | 0x03; //  d11
-    } else if (cc > 0 ) {
-      // control
-      rx = audcx << 4 | dmod << 3 | 0x05; // d101
-    } else {
-      // volume 
-      rx = audvx << 4 | dmod << 3 | 0x01; // d001
-    }
-    //w->writeText(fmt::sprintf("    byte %d\n", rx));
-    out.emplace_back(rx);
-
-  } else if ( delta > 1 ) {
-    // write all registers
-    unsigned char dmod;
-    if (framecount > 2) {
-      dmod = 1;
-      framecount -= 2;
-    } else {
-      dmod = framecount - 1;
-      framecount = 0;
-    }
-
-    // frequency
-    unsigned char fdx = audfx << 3 | dmod << 2 | 0x02;
-    //w->writeText(fmt::sprintf("    byte %d", x));
-    out.emplace_back(fdx);
-
-    // waveform and volume
-    unsigned char cvx = (audcx << 4) + audvx;
-    //w->writeText(fmt::sprintf(",%d\n", y));
-    out.emplace_back(cvx);
-
-  }
-
-  if (delta > 0 && !encodeRemainder) {
-    return framecount;
-  }
-
-  // when delta is zero / we have leftover frames, sustain
-  while (framecount > 0) {
-    unsigned char dmod;
-    if (framecount > 32) {
-      dmod = 31;
-      framecount -= 32;
-    } else {
-      dmod = framecount - 1;
-      framecount = 0;
-    }
-    unsigned char sx =  dmod << 3 | 0x04;
-    //w->writeText(fmt::sprintf("    byte %d; SUSTAIN %d\n", sx, dmod + 1));
-    out.emplace_back(sx);
-  }
-
-  return 0;
-
-}
-
 size_t DivExportTIAZip::encodeChannelStateCodes(
   const ChannelState& next,
   const char duration,
@@ -2065,95 +1799,3 @@ void DivExportTIAZip::writeWaveformHeader(SafeWriter* w, const char * key) {
   w->writeText(fmt::sprintf("%s_ADDR\n", key));
 }
 
-
-int getFontIndex(const char c) {
-  if ('0' <= c && c <= '9') return c - '0';
-  if (c == ' ' || c == 0) return 10;
-  if (c == '.') return 12;
-  if (c == '<') return 13;
-  if (c == '>') return 14;
-  if ('a' <= c && c <= 'z') return 15 + c - 'a';
-  if ('A' <= c && c <= 'Z') return 15 + c - 'A';
-  return 11;
-}
-
-// 4x6 font data used to encode title
-unsigned char FONT_DATA[41][6] = {
-  {0x00, 0x04, 0x0a, 0x0a, 0x0a, 0x04}, // SYMBOL_ZERO
-  {0x00, 0x0e, 0x04, 0x04, 0x04, 0x0c}, // SYMBOL_ONE
-  {0x00, 0x0e, 0x08, 0x06, 0x02, 0x0c}, // SYMBOL_TWO
-  {0x00, 0x0c, 0x02, 0x06, 0x02, 0x0c}, // SYMBOL_THREE
-  {0x00, 0x02, 0x02, 0x0e, 0x0a, 0x0a}, // SYMBOL_FOUR
-  {0x00, 0x0c, 0x02, 0x0c, 0x08, 0x06}, // SYMBOL_FIVE
-  {0x00, 0x06, 0x0a, 0x0c, 0x08, 0x06}, // SYMBOL_SIX
-  {0x00, 0x08, 0x08, 0x04, 0x02, 0x0e}, // SYMBOL_SEVEN
-  {0x00, 0x06, 0x0a, 0x0e, 0x0a, 0x0c}, // SYMBOL_EIGHT
-  {0x00, 0x02, 0x02, 0x0e, 0x0a, 0x0c}, // SYMBOL_NINE
-  {0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // SYMBOL_SPACE
-  {0x00, 0x0e, 0x00, 0x00, 0x00, 0x00}, // SYMBOL_UNDERSCORE
-  {0x00, 0x04, 0x00, 0x00, 0x00, 0x00}, // SYMBOL_DOT
-  {0x00, 0x02, 0x04, 0x08, 0x04, 0x02}, // SYMBOL_LT
-  {0x00, 0x08, 0x04, 0x02, 0x04, 0x08}, // SYMBOL_GT
-  {0x00, 0x0a, 0x0a, 0x0e, 0x0a, 0x0e}, // SYMBOL_A
-  {0x00, 0x0e, 0x0a, 0x0c, 0x0a, 0x0e}, // SYMBOL_B
-  {0x00, 0x0e, 0x08, 0x08, 0x08, 0x0e}, // SYMBOL_C
-  {0x00, 0x0c, 0x0a, 0x0a, 0x0a, 0x0c}, // SYMBOL_D
-  {0x00, 0x0e, 0x08, 0x0c, 0x08, 0x0e}, // SYMBOL_E
-  {0x00, 0x08, 0x08, 0x0c, 0x08, 0x0e}, // SYMBOL_F
-  {0x00, 0x0e, 0x0a, 0x08, 0x08, 0x0e}, // SYMBOL_G
-  {0x00, 0x0a, 0x0a, 0x0e, 0x0a, 0x0a}, // SYMBOL_H
-  {0x00, 0x04, 0x04, 0x04, 0x04, 0x04}, // SYMBOL_I
-  {0x00, 0x0e, 0x0a, 0x02, 0x02, 0x02}, // SYMBOL_J
-  {0x00, 0x0a, 0x0a, 0x0c, 0x0a, 0x0a}, // SYMBOL_K
-  {0x00, 0x0e, 0x08, 0x08, 0x08, 0x08}, // SYMBOL_L
-  {0x00, 0x0a, 0x0a, 0x0e, 0x0e, 0x0e}, // SYMBOL_M
-  {0x00, 0x0a, 0x0a, 0x0a, 0x0a, 0x0e}, // SYMBOL_N
-  {0x00, 0x0e, 0x0a, 0x0a, 0x0a, 0x0e}, // SYMBOL_O
-  {0x00, 0x08, 0x08, 0x0e, 0x0a, 0x0e}, // SYMBOL_P
-  {0x00, 0x06, 0x08, 0x0a, 0x0a, 0x0e}, // SYMBOL_Q
-  {0x00, 0x0a, 0x0a, 0x0c, 0x0a, 0x0e}, // SYMBOL_R
-  {0x00, 0x0e, 0x02, 0x0e, 0x08, 0x0e}, // SYMBOL_S
-  {0x00, 0x04, 0x04, 0x04, 0x04, 0x0e}, // SYMBOL_T
-  {0x00, 0x0e, 0x0a, 0x0a, 0x0a, 0x0a}, // SYMBOL_U
-  {0x00, 0x04, 0x04, 0x0e, 0x0a, 0x0a}, // SYMBOL_V
-  {0x00, 0x0e, 0x0e, 0x0e, 0x0a, 0x0a}, // SYMBOL_W
-  {0x00, 0x0a, 0x0e, 0x04, 0x0e, 0x0a}, // SYMBOL_X
-  {0x00, 0x04, 0x04, 0x0e, 0x0a, 0x0a}, // SYMBOL_Y
-  {0x00, 0x0e, 0x08, 0x04, 0x02, 0x0e}  // SYMBOL_Z
-};
-
-size_t DivExportTIAZip::writeTextGraphics(SafeWriter* w, const char* value) {
-  size_t bytesWritten = 0;
-
-  bool end = false;
-  size_t len = 0; 
-  while (len < 6 || !end) {
-    w->writeText(fmt::sprintf("TITLE_GRAPHICS_%d\n    byte ", len));
-    len++;
-    char ax = 0;
-    if (!end) {
-      ax = *value++;
-      if (0 == ax) {
-        end = true;
-      }
-    } 
-    char bx = 0;
-    if (!end) {
-      bx = *value++;
-      if (0 == bx) end = true;
-    }
-    auto ai = getFontIndex(ax);
-    auto bi = getFontIndex(bx);
-    for (int i = 0; i < 6; i++) {
-      if (i > 0) {
-        w->writeText(",");
-      }
-      const unsigned char c = (FONT_DATA[ai][i] << 4) + FONT_DATA[bi][i];
-      w->writeText(fmt::sprintf("%d", c));
-      bytesWritten += 1;
-    }
-    w->writeText("\n");
-  }
-  w->writeText(fmt::sprintf("TITLE_LENGTH = %d\n", len));
-  return bytesWritten;
-}

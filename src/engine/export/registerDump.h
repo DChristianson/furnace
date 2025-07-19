@@ -22,6 +22,7 @@
 
 #include "../engine.h"
 
+#include "../../ta-log.h"
 const int TICKS_PER_SECOND = 1000000;
 
 /**
@@ -158,17 +159,19 @@ struct ChannelStateSequence {
     if (intervals.size() == 0) {
       intervals.emplace_back(ChannelStateInterval(ChannelState(0), 0, row));
     }
-    ChannelStateInterval &lastInterval = intervals.back();
     int total = ticks + remainder;
     int cycles = total / freq;
-    int nextDuration = lastInterval.duration + cycles;
-    if (nextDuration > maxIntervalDuration) {
+    int totalDuration = intervals.back().duration + cycles;
+    while (totalDuration > maxIntervalDuration) {
+      ChannelStateInterval &lastInterval = intervals.back();
       lastInterval.duration = maxIntervalDuration;
-      nextDuration = nextDuration - maxIntervalDuration;
-      intervals.emplace_back(ChannelStateInterval(lastInterval.state, nextDuration, lastInterval.row));
-    } else {
-      lastInterval.duration = nextDuration;
-    }    
+      // BUGBUG: wrong calcs
+      logD("adding duration %d %d", maxIntervalDuration, totalDuration);
+      totalDuration = totalDuration - maxIntervalDuration;
+      logD("added duration %d %d", maxIntervalDuration, totalDuration);
+      intervals.emplace_back(ChannelStateInterval(lastInterval.state, 0, lastInterval.row));
+    }
+    intervals.back().duration = totalDuration;
     return total - (cycles * freq);
   }
 
@@ -258,6 +261,14 @@ public:
     ChannelStateSequence &dumpSequence 
   );
 
+  void writeText(SafeWriter* w);
+
 };
+
+// BUGBUG: remove
+size_t writeTextGraphics(SafeWriter* w, const char* value);
+// debugging
+void writeRegisterDumps(SafeWriter* w, const std::vector<RegisterDump*> &registerDumps);
+
 
 #endif // _REGISTERDUMP_H
