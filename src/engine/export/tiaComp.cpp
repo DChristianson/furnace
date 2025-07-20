@@ -17,25 +17,12 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include "batariBasic.h"
-#include "tiaZip.h"
+#include "tiaComp.h"
 
 #include <fmt/printf.h>
 #include "../../ta-log.h"
 
-static const std::map<unsigned int, unsigned int> batariChannel0AddressMap = {
-  {AUDC0, 0},
-  {AUDF0, 1},
-  {AUDV0, 2},
-};
-
-static const std::map<unsigned int, unsigned int> batariChannel1AddressMap = {
-  {AUDC1, 0},
-  {AUDF1, 1},
-  {AUDV1, 2},
-};
-
-bool DivExportBatari::go(DivEngine* eng) {
+bool DivExportTIAComp::go(DivEngine* eng) {
   progress[0].name = "Export";
   progress[0].amount = 0.0f;
 
@@ -43,37 +30,37 @@ bool DivExportBatari::go(DivEngine* eng) {
   running = true;
   failed = false;
   mustAbort = false;
-  exportThread = new std::thread(&DivExportBatari::run, this);
+  exportThread = new std::thread(&DivExportTIAComp::run, this);
   return true;
 }
 
-void DivExportBatari::wait() {
+void DivExportTIAComp::wait() {
   if (exportThread!=NULL) {
     exportThread->join();
     delete exportThread;
   }
 }
 
-void DivExportBatari::abort() {
+void DivExportTIAComp::abort() {
   mustAbort=true;
   wait();
 }
 
-bool DivExportBatari::isRunning() {
+bool DivExportTIAComp::isRunning() {
   return running;
 }
 
-bool DivExportBatari::hasFailed() {
+bool DivExportTIAComp::hasFailed() {
   return failed;
 }
 
-DivROMExportProgress DivExportBatari::getProgress(int index) {
+DivROMExportProgress DivExportTIAComp::getProgress(int index) {
   return progress[0];
 }
 
-void DivExportBatari::run() {
+void DivExportTIAComp::run() {
 
-  auto encoding = conf.getString("codec", "basicx");
+  auto codec = conf.getString("codec", "tiacomp");
   auto addressBits = conf.getInt("addressBits", 8);
   auto debugRegisterDump = conf.getBool("debug", false);
 
@@ -93,17 +80,22 @@ void DivExportBatari::run() {
   }
 
   // write track data
-  if (encoding == "basic") {
+  // according to codec
+  if (codec == "basic") {
     // basic encoding for each frame
     writeTrackDataBasic(false, true, addressBits);
 
-  } else if (encoding == "basicx") {
+  } else if (codec == "basicx") {
     // basic encoding, with durations
     writeTrackDataBasic(true, true, addressBits);
 
-  } else if (encoding == "tiacomp") {
+  } else if (codec == "tiacomp") {
     // compact delta encoding
     writeTrackDataTIAComp(addressBits);
+
+  }else if (codec == "fseq") {
+    // furnace sequence encoding
+    writeTrackDataFSeq();
 
   }
 
@@ -133,7 +125,7 @@ void DivExportBatari::run() {
 
 
 // simple register dump with separate tables for frequency and control / volume
-void DivExportBatari::writeTrackDataBasic(
+void DivExportTIAComp::writeTrackDataBasic(
   bool encodeDuration,
   bool independentChannelPlayback,
   int addressBits
@@ -225,7 +217,7 @@ void DivExportBatari::writeTrackDataBasic(
         channel,
         0,
         -1,
-        channel == 0 ? batariChannel0AddressMap : batariChannel1AddressMap,
+        channel == 0 ? tiaChannel0AddressMap : tiaChannel1AddressMap,
         dumpSequences[subsong][channel]
       );
       size_t totalDataPointsThisSequence = dumpSequences[subsong][channel].size() + 1;
@@ -234,7 +226,7 @@ void DivExportBatari::writeTrackDataBasic(
     }
   }
 
-  const size_t maxSequenceBytes = 2 << addressBits;
+  const size_t maxSequenceBytes = 1 << addressBits;
   if (independentChannelPlayback) {
     // channels do not have to be synchronized, can be played back independently
     if (sizeOfAllSequences > maxSequenceBytes) {
@@ -290,7 +282,7 @@ void DivExportBatari::writeTrackDataBasic(
         if (addressBits > 8) {
           trackData->writeText(fmt::sprintf("AUDIO_TRACK_%d\n", subsong, channel));
         } else {
-          trackData->writeText(fmt::sprintf("AUDIO_TRACK_%d = . - AUDIO_F%d + 1\n", subsong, channel));
+          trackData->writeText(fmt::sprintf("AUDIO_TRACK_%d = . - AUDIO_F + 1\n", subsong, channel));
         }
       }
       size_t i = 0;
@@ -368,7 +360,7 @@ void DivExportBatari::writeTrackDataBasic(
 }
 
 // Compact delta encoding
-void DivExportBatari::writeTrackDataTIAComp(int addressBits) {
+void DivExportTIAComp::writeTrackDataTIAComp(int addressBits) {
 
   // write track audio data
   SafeWriter* trackData = new SafeWriter;
@@ -420,7 +412,7 @@ void DivExportBatari::writeTrackDataTIAComp(int addressBits) {
         channel,
         0,
         -1,
-        channel == 0 ? batariChannel0AddressMap : batariChannel1AddressMap,
+        channel == 0 ? tiaChannel0AddressMap : tiaChannel1AddressMap,
         dumpSequence
       );
       if (addressBits > 8) {
@@ -476,8 +468,231 @@ void DivExportBatari::writeTrackDataTIAComp(int addressBits) {
 
 }
 
+// furnace sequence encoding
+void DivExportTIAComp::writeTrackDataFSeq() {
+
+  size_t numSongs = e->song.subsong.size();
+
+  // convert to state sequences
+  logD("extracting sequences");
+  std::map<String, ChannelStateSequence> dumpSequenceMap;
+  for (size_t subsong = 0; subsong < numSongs; subsong++) {
+    auto registerDump = registerDumps[subsong];
+    for (int channel = 0; channel < 2; channel++) {
+      // capture the channel dump
+      registerDump->writeChannelStateSequenceByRow(
+        channel,
+        0,
+        -1,
+        channel == 0 ? tiaChannel0AddressMap : tiaChannel1AddressMap,
+        dumpSequenceMap
+      );
+    }
+  }
+
+  // compress the patterns into common subsequences
+  logD("performing sequence compression");
+  std::map<uint64_t, String> commonDumpSequences;
+  std::map<uint64_t, unsigned int> frequencyMap;
+  std::map<String, String> representativeMap;
+  for (auto& x: dumpSequenceMap) {
+    uint64_t hash = x.second.hash();
+    logD("%s -> %d", x.first.c_str(), hash);
+    auto it = commonDumpSequences.emplace(hash, x.first);
+    if (it.second) {
+      frequencyMap.emplace(hash, 1);
+    } else {
+      frequencyMap[hash] += 1;
+    }
+    representativeMap.emplace(x.first, it.first->second);
+  }
+  for (auto& x: frequencyMap) {
+    auto &key = commonDumpSequences[x.first];
+    logD("%s (%d): %d", key.c_str(), x.first, x.second);
+  }
+
+  // create track data
+  logD("writing track audio data");
+  SafeWriter* trackData=new SafeWriter;
+  trackData->init();
+  trackData->writeText(fmt::sprintf("; Song: %s\n", e->song.name));
+  trackData->writeText(fmt::sprintf("; Author: %s\n", e->song.author));
+
+  trackData->writeText("\n#include \"cores/fseq_player_core.asm\"\n");
+
+  // emit song table
+  logD("writing song table");
+  size_t songTableSize = 0;
+  trackData->writeText("\n; Song Lookup Table\n");
+  trackData->writeText(fmt::sprintf("NUM_SONGS = %d\n", e->song.subsong.size()));
+  trackData->writeText("SONG_TABLE_START_LO\n");
+  for (size_t i = 0; i < e->song.subsong.size(); i++) {
+    trackData->writeText(fmt::sprintf("SONG_%d = . - SONG_TABLE_START_LO\n", i));
+    trackData->writeText(fmt::sprintf("    byte <SONG_%d_ADDR\n", i));
+    songTableSize++;
+  }
+  trackData->writeText("SONG_TABLE_START_HI\n");
+  for (size_t i = 0; i < e->song.subsong.size(); i++) {
+    trackData->writeText(fmt::sprintf("    byte >SONG_%d_ADDR\n", i));
+    songTableSize++;
+  }
+
+  // collect and emit song data
+  // borrowed from fileops
+  size_t songDataSize = 0;
+  trackData->writeText("; songs\n");
+  std::vector<PatternIndex> patterns;
+  const int channelCount = 2;
+  bool alreadyAdded[channelCount][256];
+  for (size_t i = 0; i < e->song.subsong.size(); i++) {
+    trackData->writeText(fmt::sprintf("SONG_%d_ADDR\n", i));
+    DivSubSong* subs = e->song.subsong[i];
+    memset(alreadyAdded, 0, 2*256*sizeof(bool));
+    for (int j = 0; j < subs->ordersLen; j++) {
+      trackData->writeText("    byte ");
+      for (int k = 0; k < channelCount; k++) {
+        if (k > 0) {
+          trackData->writeText(", ");
+        }
+        unsigned short p = subs->orders.ord[k][j];
+        logD("ss: %d ord: %d chan: %d pat: %d", i, j, k, p);
+        String key = getPatternKey(i, k, p);
+        trackData->writeText(key);
+        songDataSize++;
+
+        if (alreadyAdded[k][p]) continue;
+        patterns.push_back(PatternIndex(key, i, j, k, p));
+        alreadyAdded[k][p] = true;
+      }
+      trackData->writeText("\n");
+    }
+    trackData->writeText("    byte 255\n");
+    songDataSize++;
+  }
+  
+  // pattern lookup
+  size_t patternTableSize = 0;
+  trackData->writeC('\n');
+  trackData->writeText("; Pattern Lookup Table\n");
+  trackData->writeText(fmt::sprintf("NUM_PATTERNS = %d\n", patterns.size()));
+  trackData->writeText("PAT_TABLE_START_LO\n");
+  for (PatternIndex& patternIndex: patterns) {
+    trackData->writeText(fmt::sprintf("%s = . - PAT_TABLE_START_LO\n", patternIndex.key.c_str()));
+    trackData->writeText(fmt::sprintf("   byte <%s_ADDR\n", patternIndex.key.c_str()));
+    patternTableSize++;
+  }
+  trackData->writeText("PAT_TABLE_START_HI\n");
+  for (PatternIndex& patternIndex: patterns) {
+    trackData->writeText(fmt::sprintf("   byte >%s_ADDR\n", patternIndex.key.c_str()));
+    patternTableSize++;
+  }
+
+  // emit sequences
+  // we emit the "note" being played as an assembly variable 
+  // later we will figure out what we need to emit as far as TIA register settings
+  // this assumes the song has a limited number of unique "notes"
+  size_t patternDataSize = 0;
+  for (PatternIndex& patternIndex: patterns) {
+    DivPattern* pat = e->song.subsong[patternIndex.subsong]->pat[patternIndex.chan].getPattern(patternIndex.pat, false);
+    trackData->writeText(fmt::sprintf("; Subsong: %d Channel: %d Pattern: %d / %s\n", patternIndex.subsong, patternIndex.chan, patternIndex.pat, pat->name));
+    trackData->writeText(fmt::sprintf("%s_ADDR", patternIndex.key.c_str()));
+    for (int j = 0; j<e->song.subsong[patternIndex.subsong]->patLen; j++) {
+      String key = getSequenceKey(patternIndex.subsong, patternIndex.ord, j, patternIndex.chan);
+      auto rr = representativeMap.find(key);
+      if (rr == representativeMap.end()) {
+        // BUGBUG: pattern had no writes
+        continue;
+      }
+      if (j % 8 == 0) {
+        trackData->writeText("\n    byte ");
+      } else {
+        trackData->writeText(",");
+      }
+      trackData->writeText(rr->second); // the representative
+      patternDataSize++;
+    }
+    trackData->writeText("\n    byte 255\n");
+    patternDataSize++;
+  }
+
+  // emit waveform table
+  // this is where we can lookup specific instrument/note/octave combinations
+  // can be quite expensive to store this table (2 bytes per waveform)
+  size_t waveformTableSize = 0;
+  trackData->writeC('\n');
+  trackData->writeText("; Waveform Lookup Table\n");
+  trackData->writeText(fmt::sprintf("NUM_WAVEFORMS = %d\n", commonDumpSequences.size()));
+  trackData->writeText("WF_TABLE_START_LO\n");
+  for (auto& x: commonDumpSequences) {
+    trackData->writeText(fmt::sprintf("%s = . - WF_TABLE_START_LO\n", x.second.c_str()));
+    trackData->writeText(fmt::sprintf("   byte <%s_ADDR\n", x.second.c_str()));
+    waveformTableSize++;
+  }
+  trackData->writeText("WF_TABLE_START_HI\n");
+  for (auto& x: commonDumpSequences) {
+    trackData->writeText(fmt::sprintf("   byte >%s_ADDR\n", x.second.c_str()));
+    waveformTableSize++;
+  }
+    
+  // emit waveforms
+  size_t waveformDataSize = 0;
+  trackData->writeC('\n');
+  trackData->writeText("; Waveforms\n");
+  for (auto& x: commonDumpSequences) {
+    auto freq = frequencyMap[x.first];
+    trackData->writeText(fmt::sprintf("%s_ADDR\n", x.second.c_str()));
+    trackData->writeText(fmt::sprintf("; Hash %d, Freq %d\n", x.first, freq));
+    auto& dump = dumpSequenceMap[x.second];
+    ChannelState last(dump.initialState);
+    std::vector<unsigned char> codeSeq;
+    int totalDuration = 0;
+    for (auto& n: dump.intervals) {
+      codeSeq.clear();
+      trackData->writeText(
+        fmt::sprintf(
+          "    ;F%d C%d V%d D%d\n",
+          n.state.registers[1],
+          n.state.registers[0],
+          n.state.registers[2],
+          n.duration
+        )
+      );
+      waveformDataSize += encodeChannelState(n.state, n.duration, last, true, codeSeq);
+      trackData->writeText("    byte ");
+      for (size_t i = 0; i < codeSeq.size(); i++) {
+        if (i > 0) {
+          trackData->writeC(',');
+        }
+        trackData->writeText(fmt::sprintf("%d", codeSeq[i]));
+      }
+      trackData->writeC('\n');
+      totalDuration += n.duration;
+      last = n.state;
+    }
+    trackData->writeText("    byte 0\n");
+    trackData->writeText(fmt::sprintf("    ;Total Duration = %d\n", totalDuration));
+    waveformDataSize++;
+  }
+
+  // audio metadata
+  trackData->writeC('\n');
+  trackData->writeText(fmt::sprintf("; Song Table Size %d\n", songTableSize));
+  trackData->writeText(fmt::sprintf("; Song Data Size %d\n", songDataSize));
+  trackData->writeText(fmt::sprintf("; Pattern Lookup Table Size %d\n", patternTableSize));
+  trackData->writeText(fmt::sprintf("; Pattern Data Size %d\n", patternDataSize));
+  trackData->writeText(fmt::sprintf("; Waveform Lookup Table Size %d\n", waveformTableSize));
+  trackData->writeText(fmt::sprintf("; Waveform Data Size %d\n", waveformDataSize));
+  size_t totalDataSize = 
+    songTableSize + songDataSize + patternTableSize + 
+    patternDataSize + waveformTableSize + waveformDataSize;
+  trackData->writeText(fmt::sprintf("; Total Data Size %d\n", totalDataSize));
+
+  output.push_back(DivROMExportOutput("Track_data.asm", trackData));
+
+}
+
 /**
- *  Write note data as a delta:
+ *  Write note data using delta encoding.
  * 
  *   fffff010 ccccvvvv           frequency + control + volume, duration 1
  *   fffff110 ccccvvvv           " " ", duration 2
@@ -491,7 +706,7 @@ void DivExportBatari::writeTrackDataTIAComp(int addressBits) {
  *   xxxxx111                    frequency = x >> 3, duration 2
  *   00000000                    stop
  */
-int DivExportBatari::encodeChannelState(
+int DivExportTIAComp::encodeChannelState(
   const ChannelState& next,
   const char duration,
   const ChannelState& last,
@@ -525,7 +740,6 @@ int DivExportBatari::encodeChannelState(
       framecount = 0;
     }
     unsigned char rx = (dmod > 0) ? dmod << 3 : 0x01; 
-    //w->writeText(fmt::sprintf("    byte %d; PAUSE %d\n", rx, dmod));
     out.emplace_back(rx);
     
   } else if ( delta == 1 ) {
@@ -550,7 +764,6 @@ int DivExportBatari::encodeChannelState(
       // volume 
       rx = audvx << 4 | dmod << 3 | 0x01; // d001
     }
-    //w->writeText(fmt::sprintf("    byte %d\n", rx));
     out.emplace_back(rx);
 
   } else if ( delta > 1 ) {
@@ -566,12 +779,10 @@ int DivExportBatari::encodeChannelState(
 
     // frequency
     unsigned char fdx = audfx << 3 | dmod << 2 | 0x02;
-    //w->writeText(fmt::sprintf("    byte %d", x));
     out.emplace_back(fdx);
 
     // waveform and volume
     unsigned char cvx = (audcx << 4) + audvx;
-    //w->writeText(fmt::sprintf(",%d\n", y));
     out.emplace_back(cvx);
 
   }
@@ -599,7 +810,7 @@ int DivExportBatari::encodeChannelState(
 
 }
 
-DivExportBatari::~DivExportBatari() {
+DivExportTIAComp::~DivExportTIAComp() {
   for (auto registerDump : registerDumps) {
     delete registerDump;
   }

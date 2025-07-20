@@ -25,13 +25,6 @@
 #include "suffixTree.h"
 #include "huffman.h"
 
-const int AUDC0 = 0x15;
-const int AUDC1 = 0x16;
-const int AUDF0 = 0x17;
-const int AUDF1 = 0x18;
-const int AUDV0 = 0x19;
-const int AUDV1 = 0x1A;
-
 class DivExportTIAZip : public DivROMExport {
 
   DivEngine* e;

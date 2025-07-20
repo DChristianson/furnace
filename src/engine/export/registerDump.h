@@ -25,6 +25,24 @@
 #include "../../ta-log.h"
 const int TICKS_PER_SECOND = 1000000;
 
+inline auto getSequenceKey(unsigned short subsong, unsigned short ord, unsigned short row, unsigned short channel) {
+  return fmt::sprintf(
+        "SEQ_S%02x_O%02x_R%02x_C%02x",
+         subsong, 
+         ord,
+         row,
+         channel);
+}
+
+inline auto getPatternKey(unsigned short subsong, unsigned short channel, unsigned short pattern) {
+  return fmt::sprintf(
+    "PAT_S%02x_C%02x_P%02x",
+    subsong,
+    channel,
+    pattern
+  );
+}
+
 /**
  * Identifies a row within a song.
  */
@@ -51,6 +69,22 @@ struct RowIndex {
     }
     return changed;
   }  
+};
+
+struct PatternIndex {
+  String key;
+  unsigned short subsong, ord, chan, pat;
+  PatternIndex(
+    const String& k,
+    unsigned short s,
+    unsigned short o,
+    unsigned short c,
+    unsigned short p):
+    key(k),
+    subsong(s),
+    ord(o),
+    chan(c),
+    pat(p) {}
 };
 
 const size_t CHANNEL_REGISTERS = 4;
@@ -165,10 +199,7 @@ struct ChannelStateSequence {
     while (totalDuration > maxIntervalDuration) {
       ChannelStateInterval &lastInterval = intervals.back();
       lastInterval.duration = maxIntervalDuration;
-      // BUGBUG: wrong calcs
-      logD("adding duration %d %d", maxIntervalDuration, totalDuration);
       totalDuration = totalDuration - maxIntervalDuration;
-      logD("added duration %d %d", maxIntervalDuration, totalDuration);
       intervals.emplace_back(ChannelStateInterval(lastInterval.state, 0, lastInterval.row));
     }
     intervals.back().duration = totalDuration;
@@ -261,11 +292,41 @@ public:
     ChannelStateSequence &dumpSequence 
   );
 
+  /**
+   * Extract channel states in a song, keyed on subsong, ord, row and channel.
+   */
+  void writeChannelStateSequenceByRow(
+    int channel,
+    int systemIndex,
+    int suppressVolume,
+    const std::map<unsigned int, unsigned int> &addressMap,
+    std::map<String, ChannelStateSequence> &dumpSequenceMap 
+  );
+
   void writeText(SafeWriter* w);
 
 };
 
-// BUGBUG: remove
+const int AUDC0 = 0x15;
+const int AUDC1 = 0x16;
+const int AUDF0 = 0x17;
+const int AUDF1 = 0x18;
+const int AUDV0 = 0x19;
+const int AUDV1 = 0x1A;
+
+static const std::map<unsigned int, unsigned int> tiaChannel0AddressMap = {
+  {AUDC0, 0},
+  {AUDF0, 1},
+  {AUDV0, 2},
+};
+
+static const std::map<unsigned int, unsigned int> tiaChannel1AddressMap = {
+  {AUDC1, 0},
+  {AUDF1, 1},
+  {AUDV1, 2},
+};
+
+// BUGBUG: shared, move or remove
 size_t writeTextGraphics(SafeWriter* w, const char* value);
 // debugging
 void writeRegisterDumps(SafeWriter* w, const std::vector<RegisterDump*> &registerDumps);

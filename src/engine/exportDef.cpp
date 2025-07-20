@@ -109,12 +109,12 @@ void DivEngine::registerROMExports() {
     false, DIV_REQPOL_ANY
   );
 
-  romExportDefs[DIV_ROM_BATARI]=new DivROMExportDef(
-    "Atari 2600 BAtari Basic driver", "Dave Christianson",
+  romExportDefs[DIV_ROM_TIACOMP]=new DivROMExportDef(
+    "Atari 2600 Compact TIA driver", "Dave Christianson",
     "low resource usage, low compression driver for use with Atari 2600 and 7800 games.\n"
     "",
     "assembly files", ".asm",
-    "batari",
+    "tiacomp",
     {
       DIV_SYSTEM_TIA
     },

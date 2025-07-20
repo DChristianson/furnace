@@ -458,7 +458,7 @@ void FurnaceGUI::drawExportROM(bool onWindow) {
       }
       break;
     }
-    case DIV_ROM_BATARI: {
+    case DIV_ROM_TIACOMP: {
       String codec=romConfig.getString("codec", "basicx");
       if (ImGui::InputText("codec", &codec)) {
         altered=true;

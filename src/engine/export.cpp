@@ -22,7 +22,7 @@
 #include "export/amigaValidation.h"
 #include "export/sapr.h"
 #include "export/tiaZip.h"
-#include "export/batariBasic.h"
+#include "export/tiaComp.h"
 #include "export/tiuna.h"
 #include "export/zsm.h"
 #include "export/ipod.h"
@@ -40,8 +40,8 @@ DivROMExport* DivEngine::buildROM(DivROMExportOptions sys) {
     case DIV_ROM_TIAZIP:
       exporter=new DivExportTIAZip;
       break;
-    case DIV_ROM_BATARI:
-      exporter=new DivExportBatari;
+    case DIV_ROM_TIACOMP:
+      exporter=new DivExportTIAComp;
       break;
     case DIV_ROM_ZSM:
       exporter=new DivExportZSM;

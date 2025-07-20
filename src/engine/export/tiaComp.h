@@ -17,13 +17,13 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef _BATARI_BASIC_EXPORT_H
-#define _BATARI_BASIC_EXPORT_H
+#ifndef _TIACOMP_EXPORT_H
+#define _TIACOMP_EXPORT_H
 
 #include "../engine.h"
 #include "registerDump.h"
 
-class DivExportBatari: public DivROMExport {
+class DivExportTIAComp: public DivROMExport {
 
   DivEngine* e;
   std::vector<RegisterDump*> registerDumps;
@@ -35,8 +35,6 @@ class DivExportBatari: public DivROMExport {
   // simple encoding suitable for sound effects and
   // short game music sequences with low RAM
   //
-  // 2 bytes per channel
-  // 
   void writeTrackDataBasic(
     bool encodeDuration,
     bool independentChannelPlayback,
@@ -47,11 +45,14 @@ class DivExportBatari: public DivROMExport {
   // compact delta encoding suitable for longer sequences
   // also using low RAM
   //
-  // 2 bytes per channel
-  // 
   void writeTrackDataTIAComp(
     int addressBits
   );
+
+  // 
+  // Delta Encoding with common sequence compression
+  //
+  void writeTrackDataFSeq();
 
   int encodeChannelState(
     const ChannelState& next,
@@ -65,7 +66,7 @@ class DivExportBatari: public DivROMExport {
 
 public:
 
-  ~DivExportBatari();
+  ~DivExportTIAComp();
 
   bool go(DivEngine* eng) override;
   bool isRunning() override;
@@ -76,4 +77,4 @@ public:
 
 };
 
-#endif // _BATARI_BASIC_EXPORT_H
+#endif // _TIACOMP_EXPORT_H

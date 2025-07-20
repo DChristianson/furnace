@@ -582,7 +582,7 @@ class DivEngine {
   friend class DivExportSAPR;
   friend class DivExportTiuna;
   friend class DivExportTIAZip;
-  friend class DivExportBatari;
+  friend class DivExportTIAComp;
   friend class DivExportZSM;
   friend class DivExportiPod;
   friend class DivExportGRUB;

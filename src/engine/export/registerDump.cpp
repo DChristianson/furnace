@@ -174,6 +174,83 @@ void RegisterDump::writeChannelStateSequence(
   }
 }
 
+/**
+ * Extract channel states in a song, keyed on subsong, ord, row and channel.
+ */
+void RegisterDump::writeChannelStateSequenceByRow(
+  int channel,
+  int systemIndex,
+  int suppressVolume,
+  const std::map<unsigned int, unsigned int> &addressMap,
+  std::map<String, ChannelStateSequence> &dumpSequenceMap 
+) {
+  
+  long lastWriteIndex = -1;
+  int lastWriteTicks = 0;
+  int lastWriteSeconds = 0;
+  int deltaTicksR = 0;
+  int deltaTicks = 0;
+
+  RowIndex curRowIndex(subsong, 0, 0);
+
+  ChannelState currentState(0);
+  ChannelStateSequence *currentDumpSequence = NULL;
+  
+  for (auto &write : writes) {
+    
+    long currentWriteIndex = write.writeIndex;
+    int currentTicks = write.ticks;
+    int currentSeconds = write.seconds;
+    int freq = ((float)TICKS_PER_SECOND) / write.hz;
+
+    deltaTicks = 
+      currentTicks - lastWriteTicks + 
+      (TICKS_PER_SECOND * (currentSeconds - lastWriteSeconds));
+
+    // check if we've moved in time
+    if (lastWriteIndex < currentWriteIndex) {
+      if (lastWriteIndex >= 0) {
+        auto lastState = currentState;
+        // if volume register is zero, clear all registers
+        if (suppressVolume >= 0) {
+          if (lastState.registers[suppressVolume] == 0) {
+            lastState.clear();
+          }
+        }
+        currentDumpSequence->updateState(lastState, curRowIndex);
+        deltaTicksR = currentDumpSequence->addDuration(deltaTicks, deltaTicksR, freq, curRowIndex);
+        deltaTicks = 0;
+      }
+      lastWriteIndex = currentWriteIndex;
+      lastWriteTicks = currentTicks;
+      lastWriteSeconds = currentSeconds;
+    }
+
+    bool atNewRow = curRowIndex.advance(write.rowIndex.subsong, write.rowIndex.ord, write.rowIndex.row);
+
+    // check if we've changed rows
+    if (NULL == currentDumpSequence || atNewRow) {
+      // new sequence
+      String key = getSequenceKey(curRowIndex.subsong, curRowIndex.ord, curRowIndex.row, channel);
+      auto nextIt = dumpSequenceMap.emplace(key, ChannelStateSequence());
+      ChannelStateSequence *nextDumpSequence = &(nextIt.first->second);
+      currentDumpSequence = nextDumpSequence;
+    }
+
+    // skip markers
+    if (write.systemIndex < 0) {
+      continue;
+    }
+
+    // process write
+    auto it = addressMap.find(write.addr);
+    if (it == addressMap.end()) {
+      continue;
+    }
+    currentState.write(it->second, write.val);
+  }
+}
+
 void RegisterDump::writeText(SafeWriter* w) {
 
   int maxFrames = 0;

@@ -891,7 +891,7 @@ src/engine/export/abstract.cpp
 src/engine/export/amigaValidation.cpp
 src/engine/export/sapr.cpp
 src/engine/export/tiuna.cpp
-src/engine/export/batariBasic.cpp
+src/engine/export/tiaComp.cpp
 src/engine/export/tiaZip.cpp
 src/engine/export/registerDump.cpp
 src/engine/export/suffixTree.cpp

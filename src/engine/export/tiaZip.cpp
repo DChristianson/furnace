@@ -155,18 +155,6 @@
 //          - need low memory 6502 decoder
 // 
 
-static const std::map<unsigned int, unsigned int> tiaZipChannel0AddressMap = {
-  {AUDC0, 0},
-  {AUDF0, 1},
-  {AUDV0, 2},
-};
-
-static const std::map<unsigned int, unsigned int> tiaZipChannel1AddressMap = {
-  {AUDC1, 0},
-  {AUDF1, 1},
-  {AUDV1, 2},
-};
-
 bool DivExportTIAZip::go(DivEngine* eng) {
   progress[0].name = "Export";
   progress[0].amount = 0.0f;
@@ -472,7 +460,7 @@ void DivExportTIAZip::writeTrackDataTIAZip() {
         channel,
         0,
         -1,
-        channel == 0 ? tiaZipChannel0AddressMap : tiaZipChannel1AddressMap,
+        channel == 0 ? tiaChannel0AddressMap : tiaChannel1AddressMap,
         dumpSequence
       );
 

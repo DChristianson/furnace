@@ -48,9 +48,16 @@ def parse_stella_log(fp):
 
 # Parse RegisterWrites data
 # ; 562 T9.382958 F563.0: SS0 ORD4 ROW23 SYS0> 23 = 31
+re_song = re.compile(r'^; Song (\d+)$')
 re_regwrites = re.compile(r'^; (?P<write_index>\d+) T(?P<ticks>[0-9.]+) H(?P<hz>[0-9.]+) F(?P<frame_partial>[0-9.]+): (?P<rowid>SS\d+ ORD\d+ ROW\d+ SYS\d+)> (?P<address>\d+) = (?P<value>\d+)$')
 def parse_regwrite(fp):
+    # skip to start of song 0
     for line in fp:
+        if re_song.match(line):
+            break
+    for line in fp:
+        if re_song.match(line):
+            break
         m = re_regwrites.match(line)
         if not m:
             # if "ORD" in line:
@@ -94,7 +101,7 @@ if __name__ == '__main__':
             extend_frames(stella_writes, frame)
             ri = address - AUDC0
             stella_writes[frame][ri] = value & register_masks[ri]
-    print(f"read {len(stella_writes)} frames")
+    print(f"read {len(stella_writes)} frames, first write at {first_stella_write}")
     stella_writes = stella_writes[first_stella_write:]
     expected_writes = [[0, 0, 0, 0, 0, 0]]
     rows = ['']
@@ -111,7 +118,7 @@ if __name__ == '__main__':
                 rows.append(rowid)
             ri = address - AUDC0
             expected_writes[frame][ri] = value & register_masks[ri]
-    print(f"read {len(expected_writes)} frames")
+    print(f"read {len(expected_writes)} frames, first write at {first_expected_write}")
     expected_writes = expected_writes[first_expected_write:]
     rows = rows[first_expected_write:]
     same = True
