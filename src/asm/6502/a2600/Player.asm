@@ -2,6 +2,71 @@
     include "vcs.h"
     include "macro.h"
 
+;-----------------------------------
+; macros
+
+; F8 bank switching
+; Modified from TJ's Atari standard bankswitching macros
+
+BANK_SIZE        = $1000 ; 4K bank size 
+
+; put at the start of every bank 
+  MAC START_BANK ; {bank_number}
+BANK_NUM    SET {1}	
+BANK_ORG    SET $8000 + BANK_NUM * BANK_SIZE 
+BANK_RORG   SET $1000 + BANK_NUM * BANK_SIZE * 2
+    SEG     code		
+    ORG     BANK_ORG, $55	
+    RORG    BANK_RORG	
+    ECHO    "Start of bank", [BANK_NUM]d, ", ORG", BANK_ORG, ", RORG", BANK_RORG
+    ; from reset, always jump to bank 1  
+ON_RESET = (. & $fff) | $1000 
+    lda $fff9
+    jmp CleanStart 
+SWITCH_BANKS = (. & $fff) | $1000 
+    lda $fff8,y
+    rts
+  ENDM
+ 
+; put at the end of every bank
+  MAC END_BANK 
+    ORG     BANK_ORG + $ff8
+    RORG    BANK_RORG + $ff8
+    ; 2 hot spots
+    ds      2, 0 
+	; nmi, reset and break vectors
+    .word   0                             ; NMI (unused)
+    .word   (ON_RESET & $fff) | BANK_RORG ; RESET (high nibble needs to match BANK_RORG for debugging)
+    .word   0                             ; BRK (unused)
+  ENDM
+
+; Define a label which can be used by JMP_LBL macro
+; Example:
+;    DEF_LBL Foo
+  MAC DEF_LBL 
+{1}			
+{1}_BANK    = BANK_NUM	
+  ENDM
+
+; Jump to a label in other or same bank. The assembler will take care if the
+; code has to bankswitch or not.
+  MAC JMP_LBL ; address
+   IF {1}_BANK != BANK_NUM  
+    lda     #>({1}-1)		
+    pha
+    lda     #<({1}-1)		
+    pha
+    ldy     #{1}_BANK		
+    jmp     SWITCH_BANKS         
+   ELSE		
+    jmp     {1}
+   ENDIF
+  ENDM 
+
+;----------------------------------
+; config
+;
+
 NTSC = 0
 PAL60 = 1
 
@@ -11,7 +76,7 @@ SYSTEM = NTSC
 
 AUDIO_BUFFER_IN_RAM = 1
 
-; ----------------------------------
+;----------------------------------
 ; constants
 
 #if SYSTEM = NTSC
@@ -37,7 +102,7 @@ OVERSCAN_HEIGHT = 30
 VERTICAL_BANNER_POS = 130
 MAX_SPEED = 4
 
-; ----------------------------------
+;----------------------------------
 ; variables
 
   SEG.U variables
@@ -69,11 +134,36 @@ vis_title_start     ds 1
 vis_title_end       ds 1
 
 
-; ----------------------------------
-; code
+;-----------------------------------------------------------------------------------
+; Audio Code + Data in bank 0
 
-  SEG
-    ORG $F000
+  START_BANK 0
+
+  DEF_LBL bank_audio_play_track
+      jsr audio_play_track
+      JMP_LBL bank_audio_play_track_return
+
+  DEF_LBL bank_audio_inc_track
+        jsr audio_inc_track
+        JMP_LBL bank_audio_ctl_track_return
+
+  DEF_LBL bank_audio_dec_track
+        jsr audio_dec_track
+        JMP_LBL bank_audio_ctl_track_return
+  
+  DEF_LBL bank_audio_update
+        jsr audio_update
+        JMP_LBL bank_audio_update_return
+
+    #include "Player_core.asm"
+    #include "Track_data.asm"
+
+  END_BANK
+
+; ----------------------------------
+; Main
+
+  START_BANK 1
 
 Reset
 CleanStart
@@ -81,7 +171,8 @@ CleanStart
             CLEAN_START
 
             ; load track
-            jsr audio_play_track
+            JMP_LBL bank_audio_play_track
+    DEF_LBL bank_audio_play_track_return
             ; playback speed
             lda #1
             sta speed
@@ -158,11 +249,9 @@ _skip_trigger_pause
             bcs _right
             jmp _end_input
 _down
-            jsr audio_inc_track
-            jmp _end_input            
+            JMP_LBL bank_audio_inc_track
 _up
-            jsr audio_dec_track
-            jmp _end_input  
+            JMP_LBL bank_audio_dec_track
 _left
             lda #$ff
             jmp _add_speed
@@ -177,6 +266,7 @@ _add_speed
             lda #MAX_SPEED
 _save_speed
             sta speed
+    DEF_LBL bank_audio_ctl_track_return
 _end_input
             lda tmp_input
             sta debounce_input
@@ -201,7 +291,8 @@ audio_tracker_on
 _audio_buffer_loop
             lsr tmp_update_ctl
             bcc _audio_skip_update
-            jsr audio_update
+            JMP_LBL bank_audio_update
+    DEF_LBL bank_audio_update_return
 _audio_skip_update
             ldy #5
 _audio_update_loop
@@ -427,24 +518,12 @@ sub_freq_slice
             rts
 
 ;-----------------------------------------------------------------------------------
-; Code
-
-    #include "Player_core.asm"
-
-;-----------------------------------------------------------------------------------
-; Audio
-
-    #include "Track_data.asm"
-
-;-----------------------------------------------------------------------------------
 ; Graphics
 
 
-    ORG $FF00
+    .align 256
     
     #include "Track_meta.asm"
-
-    ORG $FF80
 
 VIS_FREQ_PF0
     byte %10101010
@@ -484,13 +563,4 @@ SPEED_UPDATE_PATTERN
     byte %01010101
     byte %11111111 ; screen unstable
 
-;-----------------------------------------------------------------------------------
-; the CPU reset vectors
-
-    ORG $FFFA
-
-    .word Reset          ; NMI
-    .word Reset          ; RESET
-    .word Reset          ; IRQ
-
-    END
+  END_BANK

@@ -52,6 +52,7 @@
 //      - all songs X all compressions
 //    - automate headless stella run + capture reg writes
 //    - automate headless stella run log comparison
+//    - fix multi-song test
 //  - glitches
 //    - TIA_Spanish_Fly is slow again
 //  - debugging
@@ -95,6 +96,8 @@
 //        - encoder
 //        - decoder
 //        - assembly
+//        - warning if too big
+//        - tested
 //    - dynamic with zip
 //        - trial span encoder - 3882 estimated bytes
 //        - encoder
@@ -102,11 +105,15 @@
 //        - validated
 // BETA 
 //  - final output schemes
-//    - zip with huffman and bank switching
+//    - 2600 batari basic
+//        - decoder
+//    - 7800 basic
+//        - decoder
+//    - zip fixed codes
 //        - assembly
 //        - tested
-//    - compact no bank switching
-//        - warning if too big
+//    - zip with huffman and bank switching
+//        - assembly
 //        - tested
 //    - compact with bank switching
 //        - encoder
@@ -120,15 +127,12 @@
 //        - validated
 //        - assembly
 //        - tested
-//    - 2600 batari basic
-//    - 7800 basic
 //  - debugging
 //    - proper analytic debug output for TIAZIP spans
 //  - glitch
 //    - tia_entertainer has inconsistent timing, missing patterns
 //  - testability
 //    - all targets test
-//    - fix multi-song test
 //    - clean up test output
 //  - dev help
 //    - docs on how to use multiple schemes
