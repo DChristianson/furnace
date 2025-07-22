@@ -131,6 +131,7 @@
 //    - proper analytic debug output for TIAZIP spans
 //  - glitch
 //    - tia_entertainer has inconsistent timing, missing patterns
+//      - missing pattern 0 causes glitching with FSEQ codex
 //  - testability
 //    - all targets test
 //    - clean up test output

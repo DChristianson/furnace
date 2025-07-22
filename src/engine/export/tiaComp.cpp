@@ -490,22 +490,15 @@ void DivExportTIAComp::writeTrackDataFSeq() {
     }
   }
 
-
-  auto fa = getSequenceKey(0, 1, 0, 0);
-  auto fb = getSequenceKey(0, 1, 0, 1);
   // replace any 0 volume subsequences
   logD("removing trivial waveforms");
   for (auto& x: dumpSequenceMap) {
-    bool trivial = true;  
-    int totalDuration = 0;
+    bool trivial = true;
     for (auto &s: x.second.intervals) {
       if (s.state.registers[2] != 0) {
         trivial = false;
+        break;
       }
-      totalDuration += s.duration;
-    }
-    if (x.first == fa || x.first == fb) {
-      logD("TESTING %s %d %d", x.first.c_str(), trivial, totalDuration);
     }
     if (trivial) {
       for (auto &s: x.second.intervals) {
