@@ -20,6 +20,7 @@ audio_fx = AUDF0
 audio_vx = AUDV0
     ENDIF
 
+    MAC AUDIO_CONTROLS
 audio_inc_track
             ldy audio_track
             iny
@@ -43,7 +44,22 @@ audio_play_track
             lda AUDIO_TRACKS_1,y
             sta audio_channel_1
             rts
-
+    ELSE
+audio_play_track
+            ldy audio_track
+            lda AUDIO_TRACKS_0_LO,y
+            sta audio_channel_0
+            lda AUDIO_TRACKS_0_HI,y
+            sta audio_channel_0+1
+            lda AUDIO_TRACKS_1_LO,y
+            sta audio_channel_1
+            lda AUDIO_TRACKS_1_HI,y
+            sta audio_channel_1+1
+            rts
+    ENDIF
+    ENDM           
+    MAC AUDIO_UPDATE
+    IF AUDIO_TRACK_ADDRESS_BITS <=8
 audio_update
             ldx #1 ; loop over both audio channels
 _audio_loop
@@ -69,18 +85,6 @@ _audio_next_channel
 _audio_end
             rts
     ELSE
-audio_play_track
-            ldy audio_track
-            lda AUDIO_TRACKS_0_LO,y
-            sta audio_channel_0
-            lda AUDIO_TRACKS_0_HI,y
-            sta audio_channel_0+1
-            lda AUDIO_TRACKS_1_LO,y
-            sta audio_channel_1
-            lda AUDIO_TRACKS_1_HI,y
-            sta audio_channel_1+1
-            rts
-
 audio_update
             ldx #2 ; loop over both audio channels
             ldy #1
@@ -116,5 +120,5 @@ audio_channel_advance
             adc audio_channel+1,x
             sta audio_channel+1,x
             rts
-
     ENDIF
+    ENDM

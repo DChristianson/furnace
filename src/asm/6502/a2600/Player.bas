@@ -1,58 +1,89 @@
- rem --------------
- rem batari basic sound
- rem based on SpiceWare's batari sfx driver
- rem    https://forums.atariage.com/topic/213203-sound-effect-driver/
- rem --------------
- 
- rem allocate 2 variables for use by the audio player
- dim ax_channel_0 = y
- dim ax_channel_1 = z
- 
- rem use the score to display selected sound effect
- dim ax_track = score + 2
- 
- rem use A to debounce the firebutton (ie: only trigger 1 sound per press)
- dim debounce = a
- 
- rem use B to slow down the up/down joystick processing
- dim up_down_delay = b
- 
- rem score's used to display selected sound effect, 
- rem so set score color to make it visible
- scorecolor = $f : rem $f = white for both NTSC and PAL 
+ rem ------------------------------------------------------------------------
+ rem Tiacomp Demo
+ rem ------------------------------------------------------------------------
+ rem
+ rem  This program shows how to use tiacomp audio.
+ rem 
 
- rem --------------
- rem our main loop
- rem --------------
+ rem ----------------------------------------------------------
+ rem set ROM size to 8k for 2 banks of 4k each
+ rem ----------------------------------------------------------
+ set romsize 8k
+
+start
+
+  rem start audio play
+ asm 
+  jsr audio_play_track
+end
 
 main
- up_down_delay = up_down_delay + 1
- if up_down_delay < 10 then goto check_fire
- up_down_delay = 0 
- 
- if !joy0up then check_down
- temp1=ax_dec_track()
- 
-check_down
- if !joy0down then check_fire 
- temp1=ax_inc_track()
- 
-check_fire
- if joy0fire then goto fire_pressed
- debounce = 0
- goto draw_the_screen
- 
-fire_pressed
- if debounce then goto draw_the_screen
- debounce = 1
- temp1=ax_play_track() 
- 
-draw_the_screen 
- drawscreen 
- temp1=ax_update() : rem for best results, update sound effect after drawscreen
+
+ rem ----------------------------------------------------------
+ rem Set color of playfield to Yellow, background to black
+ rem ---------------------------------------------------------- 
+ COLUPF=28
+ COLUBK=0
+ COLUP1=44
+
+ playfield:
+ ................................
+ ................................
+ ................................
+ ................................
+ ................................
+ ................................
+ ................................
+ ................................
+ ....X......................X....
+ ...XX......................XX...
+ ....X......................X....
+ ................................
+end
+
+ rem ----------------------------------------------------------
+ rem Call audio update
+ rem ---------------------------------------------------------- 
+ goto bank_audio_update bank2
+bank_audio_update_return
+
+ drawscreen
+
  goto main
 
- rem include player core and track data
- inline cores/ax_basic.asm
- inline Track_data.asm
+ rem ----------------------------------------------------------
+ rem Put audio controls in the main bank
+ rem ---------------------------------------------------------- 
+ asm
 
+; use vars t to z for audio control
+audio_track=t
+audio_channel=u
+audio_channel_0=u
+audio_channel_1=w
+audio_timer_0=y
+audio_timer_1=z
+
+  AUDIO_CONTROLS
+  AUDIO_CONTROL_TABLE
+
+end
+
+ bank 2
+
+ rem ----------------------------------------------------------
+ rem Load songs into bank 2
+ rem ---------------------------------------------------------- 
+  
+bank_audio_update
+ asm
+  jsr audio_update
+end
+  goto bank_audio_update_return bank1
+
+ asm
+
+  AUDIO_UPDATE
+
+  include "Track_data.asm"
+end

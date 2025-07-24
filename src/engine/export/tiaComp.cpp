@@ -154,7 +154,8 @@ void DivExportTIAComp::writeTrackDataBasic(
     trackData->writeText("\n#include \"cores/basic_player_core.asm\"\n");
   }
 
-  // create a lookup table (for use in player apps)
+  // create a relocatable lookup table (for use in player apps)
+  trackData->writeText("    MAC AUDIO_CONTROL_TABLE\n");
   size_t songDataSize = 0;
   if (independentChannelPlayback) {
     // one track table per channel
@@ -202,6 +203,7 @@ void DivExportTIAComp::writeTrackDataBasic(
     }
 
   }
+  trackData->writeText("    ENDM\n");
 
   // dump sequences
   size_t sizeOfAllSequences = 0;
@@ -377,6 +379,7 @@ void DivExportTIAComp::writeTrackDataTIAComp(int addressBits) {
 
 
   // create a lookup table for use in player apps
+  trackData->writeText("    MAC AUDIO_CONTROL_TABLE\n");
   size_t songDataSize = 0;
   // one track table per channel
   for (int channel = 0; channel < 2; channel++) {
@@ -400,6 +403,7 @@ void DivExportTIAComp::writeTrackDataTIAComp(int addressBits) {
       }
     }
   }
+  trackData->writeText("    ENDM\n");
 
   // dump sequences
   size_t trackDataSize = 0;
@@ -543,6 +547,7 @@ void DivExportTIAComp::writeTrackDataFSeq() {
   size_t songTableSize = 0;
   trackData->writeText("\n; Song Lookup Table\n");
   trackData->writeText(fmt::sprintf("NUM_SONGS = %d\n", e->song.subsong.size()));
+  trackData->writeText("    MAC AUDIO_CONTROL_TABLE\n");
   trackData->writeText("SONG_TABLE_START_LO\n");
   for (size_t i = 0; i < e->song.subsong.size(); i++) {
     trackData->writeText(fmt::sprintf("SONG_%d = . - SONG_TABLE_START_LO\n", i));
@@ -554,6 +559,7 @@ void DivExportTIAComp::writeTrackDataFSeq() {
     trackData->writeText(fmt::sprintf("    byte >SONG_%d_ADDR\n", i));
     songTableSize++;
   }
+  trackData->writeText("    ENDM\n");
 
   // collect and emit song data
   // borrowed from fileops

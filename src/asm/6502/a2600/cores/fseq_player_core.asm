@@ -16,6 +16,7 @@ audio_fx = AUDF0
 audio_vx = AUDV0
     ENDIF
 
+    MAC AUDIO_CONTROLS
 audio_inc_track
             ldy audio_song
             iny
@@ -30,7 +31,6 @@ audio_dec_track
             ldy #(NUM_SONGS - 1)
 _song_save
             sty audio_song
-
 audio_play_track
             ldy audio_song
             lda SONG_TABLE_START_LO,y
@@ -38,21 +38,42 @@ audio_play_track
             lda SONG_TABLE_START_HI,y
             sta audio_song_ptr + 1
             ldy #0
-            ldx #(audio_timer + 1 - audio_row_idx)
+            ldx #(audio_pattern_ptr + 1 - audio_row_idx)
 _song_clean_loop
             sty audio_row_idx,x
             dex
             bpl _song_clean_loop
+            lda #255
+            sta audio_waveform_idx
+            sta audio_waveform_idx + 1
+            rts
+    ENDM
+
+    MAC AUDIO_UPDATE
+audio_update
+            ; check for interrupt
+            lda audio_waveform_idx
+            and audio_waveform_idx+1
+            cmp #255
+            bne _audio_update_loopback
+            lda #0
+            sta audio_waveform_idx
+            sta audio_waveform_idx+1
+_audio_advance_order ; got a 255 on pattern
+            ldy audio_song_order
             lda (audio_song_ptr),y
+            cmp #255
+            bne _audio_advance_order_advance_pattern
+            ldy #0
+            lda (audio_song_ptr),y
+_audio_advance_order_advance_pattern
             sta audio_pattern_idx
             iny
             lda (audio_song_ptr),y
             sta audio_pattern_idx+1
             iny
             sty audio_song_order
-            rts
-
-audio_update
+_audio_update_loopback
             ldx #1 ; loop over both audio channels
 _audio_loop
             ldy audio_timer,x
@@ -142,26 +163,13 @@ _audio_next_channel
             iny
             lda (audio_pattern_ptr),y
             cmp #255
-            beq _audio_advance_order
+            beq _audio_advance_order_jmp
             sty audio_row_idx
-            jmp audio_update; if not 255 loop back 
-_audio_advance_order ; got a 255 on pattern
+            jmp _audio_update_loopback; if not 255 loop back 
+_audio_advance_order_jmp
             lda #0
             sta audio_row_idx
-            ldy audio_song_order
-            lda (audio_song_ptr),y
-            cmp #255
-            bne _audio_advance_order_advance_pattern
-            ldy #0
-            lda (audio_song_ptr),y
-_audio_advance_order_advance_pattern
-            sta audio_pattern_idx
-            iny
-            lda (audio_song_ptr),y
-            sta audio_pattern_idx+1
-            iny
-            sty audio_song_order
-            jmp audio_update;  loop back 
+            jmp _audio_advance_order
 _audio_end
             rts
-
+    ENDM

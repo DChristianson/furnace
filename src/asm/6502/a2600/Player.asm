@@ -138,24 +138,14 @@ vis_title_end       ds 1
 ; Audio Code + Data in bank 0
 
   START_BANK 0
-
-  DEF_LBL bank_audio_play_track
-      jsr audio_play_track
-      JMP_LBL bank_audio_play_track_return
-
-  DEF_LBL bank_audio_inc_track
-        jsr audio_inc_track
-        JMP_LBL bank_audio_ctl_track_return
-
-  DEF_LBL bank_audio_dec_track
-        jsr audio_dec_track
-        JMP_LBL bank_audio_ctl_track_return
   
+  ; sound update codec lives in bank 0, controls can live else where
   DEF_LBL bank_audio_update
         jsr audio_update
         JMP_LBL bank_audio_update_return
 
-    #include "Player_core.asm"
+        AUDIO_UPDATE
+
     #include "Track_data.asm"
 
   END_BANK
@@ -171,8 +161,7 @@ CleanStart
             CLEAN_START
 
             ; load track
-            JMP_LBL bank_audio_play_track
-    DEF_LBL bank_audio_play_track_return
+            jsr audio_play_track
             ; playback speed
             lda #1
             sta speed
@@ -249,9 +238,11 @@ _skip_trigger_pause
             bcs _right
             jmp _end_input
 _down
-            JMP_LBL bank_audio_inc_track
+            jsr audio_inc_track
+            jmp _end_input
 _up
-            JMP_LBL bank_audio_dec_track
+            jsr audio_dec_track
+            jmp _end_input
 _left
             lda #$ff
             jmp _add_speed
@@ -266,7 +257,6 @@ _add_speed
             lda #MAX_SPEED
 _save_speed
             sta speed
-    DEF_LBL bank_audio_ctl_track_return
 _end_input
             lda tmp_input
             sta debounce_input
@@ -516,6 +506,12 @@ sub_freq_slice
             sta PF1                 ;3  12
             sta PF2                 ;3  19
             rts
+
+;---------
+; Audio controls
+
+    AUDIO_CONTROLS
+    AUDIO_CONTROL_TABLE
 
 ;-----------------------------------------------------------------------------------
 ; Graphics

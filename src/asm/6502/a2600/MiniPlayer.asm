@@ -125,12 +125,12 @@ overscan_loop
             jmp newFrame
 
 ;-----------------------------------------------------------------------------------
-; Code
-
-  #include "Player_core.asm"
-
-;-----------------------------------------------------------------------------------
 ; Audio
+
+  ; codec macros
+  AUDIO_CONTROLS
+  AUDIO_CONTROL_TABLE
+  AUDIO_UPDATE
 
   #include "Track_data.asm"
 
