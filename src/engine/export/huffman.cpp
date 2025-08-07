@@ -71,6 +71,9 @@ size_t Bitstream::padByteBoundary() {
 }
 
 size_t Bitstream::writeBits(const std::vector<bool> &bits) {
+  if (0 == bits.size()) {
+    return 0;
+  }
   for (int i = bits.size(); --i >= 0; ) {
     writeBit(bits[i]);
   }
@@ -114,6 +117,17 @@ void HuffmanTree::buildIndex(std::map<AlphaCode, std::vector<bool>> &index) {
     }
   }
 }
+
+  void HuffmanTree::writePath(std::vector<bool> &path) {
+    HuffmanTree *current = this;
+    logD("PATH SIZE IN: %d", path.size());
+    while (current->parent != NULL) {
+      bool isLeft = current == current->parent->left;
+      path.emplace_back(isLeft);
+      current = current->parent;
+    }
+    logD("PATH SIZE OUT: %d", path.size());
+  }
 
 void HuffmanTree::buildCanonicalCodebook(std::vector<std::pair<AlphaCode, size_t>> &codeLengths) {
   std::vector<HuffmanTree *> stack;
@@ -175,11 +189,20 @@ HuffmanTree *buildHuffmanTree(
     HuffmanTree *node = new HuffmanTree(left, right);
     heap.emplace(node);
   }
-
+  
   HuffmanTree* initialTree = heap.top();
   initialTree->buildCanonicalCodebook(codebook);
+  if (frequencyMap.size() == 1) {
+    logD("FREQ MAP SIZE %d CODE TREE SIZE: %d IS LEAF ROOT: %d", frequencyMap.size(), codebook.size(), initialTree->isLeaf() ? 1 : 0);
+    auto it = codebook[0];
+    logD("LENGTH CODE 0: %d / FREQ %d", it.second, frequencyMap.at(it.first));
+  }
   delete initialTree;
   HuffmanTree* canonicalTree = buildHuffmanTreeFromCodebook(codebook);
+  if (frequencyMap.size() == 1) {
+    logD("CANONICAL TREE IS LEAF ROOT: %d, HEIGHT: %d", canonicalTree->isLeaf() ? 1 : 0, canonicalTree->height());
+
+  }
   return canonicalTree;
 }
 
@@ -187,6 +210,12 @@ HuffmanTree *buildHuffmanTreeFromCodebook(const std::vector<std::pair<AlphaCode,
   size_t codeLength = 0;
   size_t currentCode = SIZE_MAX;
   HuffmanTree* canonicalTree = new HuffmanTree();
+  if (codeLengths.size() == 1) {
+    auto &p = codeLengths.at(0);
+    assert(p.second == 0);
+    canonicalTree->setCode(p.first, 0);
+    return canonicalTree;
+  }
   for (auto &p : codeLengths) {
     currentCode += 1;
     if (p.second > codeLength) {

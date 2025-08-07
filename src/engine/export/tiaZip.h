@@ -45,7 +45,7 @@ class DivExportTIAZip : public DivROMExport {
   // LZ-type encoding 
   // compressed sequences
   //
-  void writeTrackDataTIAZip();
+  void writeTrackDataTIAZip(int compressionLevel);
 
   
   void encodeBitstreamDynamic(
@@ -62,6 +62,7 @@ class DivExportTIAZip : public DivROMExport {
     const std::vector<AlphaCode> &alphabet,
     const std::map<AlphaCode, AlphaChar> &index,
     const std::vector<AlphaCode>&codeSequence,
+    int compressionLevel,
     std::vector<AlphaCode> &compressedCodeSequence,
     std::vector<AlphaCode> &spanSequence
   );
@@ -81,14 +82,29 @@ class DivExportTIAZip : public DivROMExport {
     std::vector<AlphaCode> &out
   );
 
-  size_t compileCommands(
-    const HuffmanTree *tree,
-    SafeWriter *w
-  );
-
   void writeWaveformHeader(SafeWriter* w, const char* key);
-  size_t writeCodebook(SafeWriter* w, const char *label, const std::vector<std::pair<AlphaCode, size_t>> &codebook);
-
+  size_t writeCodebookLengths(
+    SafeWriter* w,
+    const char *label,
+    const std::vector<std::pair<AlphaCode, size_t>> &codebook
+  );
+  size_t writeCommandCodes(
+    SafeWriter* w,
+    const char *label,
+    const std::vector<std::pair<AlphaCode, size_t>> &codebook,
+    const std::map<AlphaCode, std::vector<bool>> &codeIndex
+  );
+  size_t writeDataCodes(
+    SafeWriter* w,
+    const char *label,
+    const std::vector<std::pair<AlphaCode, size_t>> &codebook,
+    const std::map<AlphaCode, std::vector<bool>> &codeIndex
+  );
+  void writeCodebookMacro(
+    SafeWriter* w,
+    const char *label,
+    const std::vector<std::pair<AlphaCode, size_t>> &codebook
+  );
   void run();
 
 public:

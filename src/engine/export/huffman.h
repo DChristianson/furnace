@@ -189,14 +189,7 @@ struct HuffmanTree {
     return current->code;
   }
 
-  void writePath(std::vector<bool> &path) {
-    HuffmanTree *current = this;
-    while (current->parent != NULL) {
-      bool isLeft = current == current->parent->left;
-      path.emplace_back(isLeft);
-      current = current->parent;
-    }
-  }
+  void writePath(std::vector<bool> &path);
 
   size_t height() {
     size_t height = 0;
