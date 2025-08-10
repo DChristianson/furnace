@@ -599,7 +599,7 @@ void DivExportTIAZip::writeTrackDataTIAZip(int compressionLevel) {
     codeSequences,
     compressedCodeSequences,
     spanSequences,
-    0x0300,
+    0x0000,
     4096 * 8
   );
 
@@ -882,7 +882,7 @@ void DivExportTIAZip::encodeBitstreamDynamic(
   const std::vector<AlphaCode> (*codeSequences)[2],
   const std::vector<AlphaCode> (*compressedCodeSequences)[2],
   const std::vector<AlphaCode> (*spanSequences)[2],
-  size_t dataOffset,
+  size_t baseDataOffset,
   size_t blockSize
 )
 {
@@ -1089,7 +1089,7 @@ void DivExportTIAZip::encodeBitstreamDynamic(
   const int addressIndexBits = 5;
 
   // produce bitstreams
-  size_t streamDataOffset = (dataOffset << 3);
+  size_t streamDataOffset = (baseDataOffset << 3);
   Bitstream *dataStreams[e->song.subsong.size()][2];
   Bitstream *trackStreams[e->song.subsong.size()][2];
   std::vector<size_t> jumpAddresses;
@@ -1190,7 +1190,7 @@ void DivExportTIAZip::encodeBitstreamDynamic(
               dataStream->writeBit(true); // no lookup
               dataStreamPointerMap[dataStream->position()] = address;
               dataStream->writeBits(address, addressBits);
-              logD("DATA %d %d - JUMP IN STREAM %d", subsong, channel, address);
+              logD("DATA %d %d - JUMP ADDRESS %08x", subsong, channel, address);
             }
             break;
           }
@@ -1205,6 +1205,7 @@ void DivExportTIAZip::encodeBitstreamDynamic(
         dataStream->seek(x.first);
         size_t address = positionMap[x.second];
         dataStream->writeBits(address, addressBits);
+        logD("DATA %d %d - REMAP JUMP ADDRESS@%08x: %08x -> %08x", subsong, channel, x.first, x.second, address);
       }
 
       // produce track stream
@@ -1235,11 +1236,11 @@ void DivExportTIAZip::encodeBitstreamDynamic(
           trackStream->writeBits(spanCodeIndex.at(CODE_SKIP));
 
         } else if (s == CODE_TAKE_DATA_JUMP) {
-          logD("SPAN %d %d - DATA_JUMP ???", subsong, channel);
+          logD("SPAN %d %d - DATA_JUMP", subsong, channel);
           trackStream->writeBits(spanCodeIndex.at(CODE_TAKE_DATA_JUMP));
 
         } else if (s == CODE_TAKE_TRACK_JUMP) {
-          logD("SPAN %d %d - TRACK_JUMP ???", subsong, channel);
+          logD("SPAN %d %d - TRACK_JUMP", subsong, channel);
           trackStream->writeBits(spanCodeIndex.at(CODE_TAKE_TRACK_JUMP));
           i++;
           s = spanSequence[i];
@@ -1248,14 +1249,14 @@ void DivExportTIAZip::encodeBitstreamDynamic(
             size_t index = (*ij).second;
             trackStream->writeBit(false); // is lookup
             trackStream->writeBits(index, addressIndexBits);
-            logD("SPAN %d %d - JUMP TABLE %d", subsong, channel, index);
+            logD("SPAN %d %d - JUMP TABLE %08x", subsong, channel, index);
 
           } else {
             size_t address = GET_CODE_JUMP_ADDRESS(s);
             trackStream->writeBit(true); // no lookup
             trackStreamPointerMap[trackStream->position()] = address;
             trackStream->writeBits(address, addressBits);
-            logD("SPAN %d %d - JUMP IN STREAM %d", subsong, channel, address);
+            logD("SPAN %d %d - JUMP ADDRESS %08x", subsong, channel, address);
 
           }
         } else {
@@ -1269,6 +1270,7 @@ void DivExportTIAZip::encodeBitstreamDynamic(
         trackStream->seek(x.first);
         size_t address = positionMap[x.second];
         trackStream->writeBits(address, addressBits);
+        logD("TRACK %d %d - REMAP JUMP ADDRESS@%08x: %08x -> %08x", subsong, channel, x.first, x.second, address);
       }
 
       for (auto& x : jumpMap) {
@@ -1288,7 +1290,7 @@ void DivExportTIAZip::encodeBitstreamDynamic(
   }
 
   // validate bitstream
-  streamDataOffset = (dataOffset << 3);
+  streamDataOffset = (baseDataOffset << 3);
   std::map<AlphaCode, size_t> jumpDistanceMap;
   for (size_t subsong = 0; subsong < e->song.subsong.size(); subsong++) {
     for (int channel = 0; channel < 2; channel += 1) {
@@ -1439,7 +1441,7 @@ void DivExportTIAZip::encodeBitstreamDynamic(
                 size_t index = trackStream->readBits(addressIndexBits);
                 nextAddress = jumpAddresses[index];
               }
-              // advance datastream pointer
+              // skip datastream pointer
               isAddress = dataStream->readBit();
               dataStream->readBits(isAddress ? addressBits : addressIndexBits);
             } else {
@@ -1481,6 +1483,7 @@ void DivExportTIAZip::encodeBitstreamDynamic(
   size_t totalCompressedBytes = 0;
 
   // write the data streams
+  trackData->writeText("\nAUDIO_DATA_OFFSET");
   for (size_t subsong = 0; subsong < e->song.subsong.size(); subsong++) {
     for (int channel = 0; channel < 2; channel += 1) {
       trackData->writeText(fmt::sprintf("\nAUDIO_DATA_S%d_C%d_START", subsong, channel));
@@ -1529,14 +1532,15 @@ void DivExportTIAZip::encodeBitstreamDynamic(
   }
 
   // write the jump table
+  // 0hhhhlll lllllsss stored as 0ssshhhh llllllll
   trackData->writeText(fmt::sprintf("\nAUDIO_JUMP_TABLE_LO_START"));
   for (auto addr : jumpAddresses) {
-      trackData->writeText(fmt::sprintf("\n    byte $%02x", addr & 0x0f));
+      trackData->writeText(fmt::sprintf("\n    byte $%02x", (addr >> 3) & 0xff));
       totalCompressedBytes += 1;
   }
   trackData->writeText(fmt::sprintf("\nAUDIO_JUMP_TABLE_HI_START"));
   for (auto addr : jumpAddresses) {
-      trackData->writeText(fmt::sprintf("\n    byte $%02x", addr >> 8));
+      trackData->writeText(fmt::sprintf("\n    byte $%02x", ((addr << 4) & 0x70) | ((addr >> 11) & 0x0f)));
       totalCompressedBytes += 1;
   }
 
@@ -1560,7 +1564,15 @@ void DivExportTIAZip::encodeBitstreamDynamic(
 
   // macros
   writeCodebookMacro(trackData, "audio_decode_command", abstractCodebook);
-  writeCodebookMacro(trackData, "audio_decode_span", spanCodebook);
+  if (spanCodebook.size() == 1) {
+    // BUGBUG: massive kludge
+    trackData->writeText("\n    ; audio_decode_span\n");
+    trackData->writeText("    MAC audio_decode_span_MACRO\n");
+    trackData->writeText("    lda #<CODE_STOP\n");
+    trackData->writeText("    ENDM\n\n");
+  } else {
+    writeCodebookMacro(trackData, "audio_decode_span", spanCodebook);
+  }
   writeCodebookMacro(trackData, "audio_decode_control", controlCodebook);
   writeCodebookMacro(trackData, "audio_decode_frequency", frequencyCodebook);
   writeCodebookMacro(trackData, "audio_decode_volume", volumeCodebook);

@@ -127,12 +127,14 @@ overscan_loop
 ;-----------------------------------------------------------------------------------
 ; Audio
 
+  #include "Track_data.asm"
+
+    .align 256
+    
   ; codec macros
   AUDIO_CONTROLS
   AUDIO_CONTROL_TABLE
   AUDIO_UPDATE
-
-  #include "Track_data.asm"
 
 ;-----------------------------------------------------------------------------------
 ; the CPU reset vectors
