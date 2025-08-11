@@ -112,7 +112,6 @@ RegisterDump::RegisterDump(
  * Extract channel states from register writes.
  */
 void RegisterDump::writeChannelStateSequence(
-  int channel,
   int systemIndex,
   int suppressVolume,
   const std::map<unsigned int, unsigned int> &addressMap,

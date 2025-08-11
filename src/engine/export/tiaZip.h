@@ -46,7 +46,6 @@ class DivExportTIAZip : public DivROMExport {
   // compressed sequences
   //
   void writeTrackDataTIAZip(int compressionLevel);
-
   
   void encodeBitstreamDynamic(
     const std::vector<AlphaCode> (*codeSequences)[2],

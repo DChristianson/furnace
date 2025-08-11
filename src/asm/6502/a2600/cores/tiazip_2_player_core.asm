@@ -19,8 +19,10 @@ audio_timer_1         ds 1
 
 audio_stream_buf  
 audio_data_0_buf      ds 1 ; channel 0 data stream
+audio_stream_next_addr_lo
 first_code            ds 1
 audio_data_1_buf      ds 1 ; channel 1 data stream
+audio_stream_next_addr_hi
 first_idx             ds 1
 audio_span_0_buf      ds 1 ; channel 0 span stream
 curr_code_len         ds 1
@@ -144,10 +146,10 @@ CODE_VOL_INC:
             byte $2c
 CODE_VOL_DEC:
             dec audio_channel_vx,x
-            bcc _audio_update_next_channel
+            jmp _audio_update_next_channel
 CODE_WRITE_REGISTERS_010:
             jsr audio_decode_frequency
-            bcc _audio_update_next_channel
+            jmp _audio_update_next_channel ; BUGBUG space?
 CODE_PAUSE:
             lda #0
             sta audio_channel_vx,x
@@ -166,13 +168,23 @@ CODE_BRANCH_POINT:
             jmp (command_ptr)
 CODE_STOP = audio_play_track
 CODE_SKIP:
-            jsr audio_stream_read_bit
-            ldy #ADDRESS_INDEX_BITS - 1
-            bcc _audio_skip_bits
-            ldy #ADDRESS_BITS - 1
-_audio_skip_bits
-            jsr audio_stream_read_bits
+            jsr audio_stream_skip_address
             jmp _audio_update_next_command 
+_audio_update_next_channel
+            lda audio_channel_vx,x
+            sta audio_vx,x
+            dex
+            bpl _audio_update_loopback
+            rts
+CODE_RETURN_FF:
+            ldx audio_stream_idx
+            lda audio_data_ff_lo,x
+            sta audio_stream_lo,x
+            lda audio_data_ff_hi,x
+            sta audio_stream_hi,x
+            lda audio_data_ff_buf,x
+            sta audio_stream_buf,x
+            jmp _audio_skip_shift ; BUGBUG true?
 CODE_RETURN_LAST:
             ldx audio_stream_idx
             lda audio_data_last_lo,x
@@ -181,57 +193,27 @@ CODE_RETURN_LAST:
             sta audio_stream_hi,x
             lda audio_data_last_buf,x
             sta audio_stream_buf,x
-            ldx audio_channel_idx
-            bcc _audio_update_next_command       
-_audio_update_next_channel
-            lda audio_channel_vx,x
-            sta audio_vx,x
-            dex
-            bpl _audio_update_loopback
-            rts
+            jmp _audio_skip_shift ; BUGBUG true?
+CODE_TAKE_TRACK_JUMP:
+            jsr audio_stream_skip_address
+            jsr audio_stream_save_context
+            lda SPAN_IDX,x
+            sta audio_stream_idx
+            jsr audio_stream_read_address
+            txa
+            asl
+            sta audio_stream_idx
+            jmp _audio_seek
 CODE_TAKE_DATA_JUMP:
-            ldx audio_stream_idx
+            jsr audio_stream_save_context
+            jsr audio_stream_read_address
 _audio_seek
-            lda audio_stream_lo,x
-            sta audio_data_last_lo,x
-            lda audio_stream_hi,x
-            sta audio_data_last_hi,x
-            lda audio_stream_buf,x
-            sta audio_data_last_buf,x
-            ; jump to a location on the data stream
-            ; 15 bits of address coords on stack
-            ;  hhhhlll lllllsss - h = high bits, l = low bits, s = shift
-            jsr audio_stream_read_bit
-            bcs _audio_seek_address
-            ldy #ADDRESS_BITS - 1
-            jsr audio_stream_read_bits
             tay
-            lda AUDIO_JUMP_TABLE_LO_START,y
-            pha
-            lda AUDIO_JUMP_TABLE_HI_START,y
-            pha
-            lda AUDIO_JUMP_TABLE_HI_START,y
-            lsr
-            lsr
-            lsr
-            lsr
-            bmi _audio_seek_pull ; always negative
-_audio_seek_address
-            ldy #(ADDRESS_BITS_HI - 1)
-            jsr audio_stream_read_bits
-            pha
-            ldy #(ADDRESS_BITS_LO - 1)
-            jsr audio_stream_read_bits
-            pha
-            ldy #(ADDRESS_BITS_BUF - 1)
-            jsr audio_stream_read_bits
-_audio_seek_pull
-            tay
-            pla
+            lda audio_stream_next_addr_lo
             clc
             adc #<(AUDIO_DATA_OFFSET-1)
             sta audio_stream_lo,x
-            pla
+            lda audio_stream_next_addr_hi
             adc #>(AUDIO_DATA_OFFSET-1)
             sta audio_stream_hi,x
 _audio_do_shift
@@ -250,6 +232,11 @@ SPAN_IDX
 audio_decode_frequency
             audio_decode_frequency_MACRO
             sta audio_fx,x
+            cmp #$20
+            bmi _audio_decode_frequency_lead
+            lda #12
+            sta audio_cx,x
+_audio_decode_frequency_lead
             rts
 
 ; --- Canonical Huffman Decoder ---
@@ -293,6 +280,72 @@ _return_symbol:
             tay
             lda CODEBOOK_CODES,y
             ldx audio_channel_idx
+            rts
+
+audio_stream_save_context
+            ldx audio_stream_idx
+            lda audio_stream_buf,x
+            sta audio_data_last_buf,x
+            lda audio_stream_lo,x
+            sta audio_data_last_lo,x
+            lda audio_stream_hi,x
+            sta audio_data_last_hi,x
+            cmp audio_data_ff_hi,x
+            bne _audio_stream_save_ff
+            lda audio_data_last_lo,x
+            cmp audio_data_ff_lo,x
+            bne _audio_stream_save_ff
+            lda audio_data_ff_buf,x
+            cmp audio_data_last_buf,x
+_audio_stream_save_ff
+            bcc _audio_stream_save_return
+            lda audio_data_last_buf,x
+            sta audio_data_ff_buf,x
+            lda audio_data_last_lo,x
+            sta audio_data_ff_lo,x
+            lda audio_data_last_hi,x
+            sta audio_data_ff_hi,x
+_audio_stream_save_return
+            rts
+
+audio_stream_read_address
+            ; jump to a location on the data stream
+            ; 15 bits of address coords on stack
+            ;  hhhhlll lllllsss - h = high bits, l = low bits, s = shift
+            jsr audio_stream_read_bit
+            bcs _audio_stream_read_in_stream
+            ldy #ADDRESS_BITS - 1
+            jsr audio_stream_read_bits
+            tay
+            lda AUDIO_JUMP_TABLE_LO_START,y
+            sta audio_stream_next_addr_lo
+            lda AUDIO_JUMP_TABLE_HI_START,y
+            sta audio_stream_next_addr_hi
+            lda AUDIO_JUMP_TABLE_HI_START,y
+            lsr
+            lsr
+            lsr
+            lsr
+            bmi _audio_stream_read_return ; always negative
+_audio_stream_read_in_stream
+            ldy #(ADDRESS_BITS_HI - 1)
+            jsr audio_stream_read_bits
+            sta audio_stream_next_addr_hi
+            ldy #(ADDRESS_BITS_LO - 1)
+            jsr audio_stream_read_bits
+            sta audio_stream_next_addr_lo
+            ldy #(ADDRESS_BITS_BUF - 1)
+            jsr audio_stream_read_bits
+_audio_stream_read_return
+            rts
+
+audio_stream_skip_address
+            jsr audio_stream_read_bit
+            ldy #ADDRESS_INDEX_BITS - 1
+            bcc _audio_skip_bits
+            ldy #ADDRESS_BITS - 1
+_audio_skip_bits
+            jsr audio_stream_read_bits
             rts
 
 audio_stream_read_bits

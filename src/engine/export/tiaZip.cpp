@@ -111,22 +111,17 @@
 //        - validated
 //        - assembly
 //        - tested
+//    - zip with huffman and bank switching
+//        - assembly
+//        - tested: simple repeat
 // BETA 
 //  - final output schemes
 //    - 7800 basic
 //        - decoder
-//    - zip fixed codes
-//        - assembly
-//        - tested
 //    - zip with huffman and bank switching
-//        - assembly
-//        - tested
-//    - compact with zip 
-//        - encoder
-//        - decoder
-//        - validated
-//        - assembly
-//        - tested
+//        - tested: complex example
+//    - zip with 4 channel isolation, huffman and bank switching
+//        - tested: complex example
 //  - debugging
 //    - proper analytic debug output for TIAZIP spans
 //  - glitch
@@ -205,7 +200,9 @@ DivROMExportProgress DivExportTIAZip::getProgress(int index) {
 void DivExportTIAZip::run() {
 
   bool debugRegisterDump = conf.getBool("debug", false);
-  int compressionLevel = conf.getInt("compressionLevel", 2);
+  int compressionLevel = conf.getInt("compressionLevel", 1);
+
+  assert(compressionLevel == 1 || compressionLevel == 0);
 
   // create register dumps
   for (size_t subsong = 0; subsong < e->song.subsong.size(); subsong++) {
@@ -355,7 +352,7 @@ CHANGE_STATE GET_CODE_WRITE_FC(AlphaCode c) {
 }
 
 unsigned char GET_CODE_WRITE_FX(AlphaCode c) {
-  return (c >> 24) & 0x1f;
+  return (c >> 24) & 0x3f;
 }
 
 CHANGE_STATE GET_CODE_WRITE_VC(AlphaCode c) {
@@ -462,11 +459,9 @@ void DivExportTIAZip::writeTrackDataTIAZip(int compressionLevel) {
     auto registerDump = registerDumps[subsong];
     for (int channel = 0; channel < 2; channel++) {
       auto &codeSequence = codeSequences[subsong][channel];
-
       // get channel states
       ChannelStateSequence dumpSequence(ChannelState(0), 16);
       registerDump->writeChannelStateSequence(
-        channel,
         0,
         -1,
         channel == 0 ? tiaChannel0AddressMap : tiaChannel1AddressMap,
@@ -1868,10 +1863,15 @@ size_t DivExportTIAZip::encodeChannelStateCodes(
   int framecount = duration > 0 ? duration : 1;
 
   unsigned char audcx = next.registers[0];
-  CHANGE_STATE cc = audcx != last.registers[0] ? CHANGE_STATE::CHANGE : CHANGE_STATE::NOOP;
   unsigned char audfx = next.registers[1];
-  CHANGE_STATE fc = audfx != last.registers[1] ? CHANGE_STATE::CHANGE : CHANGE_STATE::NOOP;
+  // normalize lead voice 12 to 4
+  if (audcx == 12) {
+    audcx = 0x04;
+    audfx += 0x20;
+  }
   unsigned char audvx = next.registers[2];
+  CHANGE_STATE cc = audcx != last.registers[0] ? CHANGE_STATE::CHANGE : CHANGE_STATE::NOOP;
+  CHANGE_STATE fc = audfx != last.registers[1] ? CHANGE_STATE::CHANGE : CHANGE_STATE::NOOP;
   CHANGE_STATE vc = audvx != last.registers[2] ? CHANGE_STATE::CHANGE : CHANGE_STATE::NOOP;
   char vxd = audvx - last.registers[2];
   // if (audvx == last.registers[2] + 1) {

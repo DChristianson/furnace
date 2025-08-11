@@ -216,7 +216,6 @@ void DivExportTIAComp::writeTrackDataBasic(
       // 1 frame per note will chew up a lot of ROM
       dumpSequences[subsong][channel].maxIntervalDuration = encodeDuration ? 8 : 1;
       registerDump->writeChannelStateSequence(
-        channel,
         0,
         -1,
         channel == 0 ? tiaChannel0AddressMap : tiaChannel1AddressMap,
@@ -413,7 +412,6 @@ void DivExportTIAComp::writeTrackDataTIAComp(int addressBits) {
     for (int channel = 0; channel < 2; channel++) {
       ChannelStateSequence dumpSequence;
       registerDump->writeChannelStateSequence(
-        channel,
         0,
         -1,
         channel == 0 ? tiaChannel0AddressMap : tiaChannel1AddressMap,
