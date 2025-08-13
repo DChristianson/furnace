@@ -133,8 +133,8 @@ overscan_loop
     
   ; codec macros
   AUDIO_CONTROLS
-  AUDIO_CONTROL_TABLE
   AUDIO_UPDATE
+  AUDIO_CONTROL_TABLE
 
 ;-----------------------------------------------------------------------------------
 ; the CPU reset vectors

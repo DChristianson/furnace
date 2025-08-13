@@ -25,7 +25,8 @@ audio_data_1_buf      ds 1 ; channel 1 data stream
 audio_stream_next_addr_hi
 first_idx             ds 1
 audio_span_0_buf      ds 1 ; channel 0 span stream
-curr_code_len         ds 1
+audio_stream_next_addr_buf
+curr_code_len         ds 1 ; BUGBUG: unused
 audio_span_1_buf      ds 1 ; channel 1 span stream
 command_ptr
 command_ptr_lo
@@ -197,18 +198,20 @@ CODE_RETURN_LAST:
 CODE_TAKE_TRACK_JUMP:
             jsr audio_stream_skip_address
             jsr audio_stream_save_context
+            ldx audio_channel_idx
             lda SPAN_IDX,x
             sta audio_stream_idx
             jsr audio_stream_read_address
+            ldx audio_channel_idx
             txa
             asl
             sta audio_stream_idx
             jmp _audio_seek
 CODE_TAKE_DATA_JUMP:
-            jsr audio_stream_save_context
             jsr audio_stream_read_address
+            jsr audio_stream_save_context
 _audio_seek
-            tay
+            ldy audio_stream_next_addr_buf
             lda audio_stream_next_addr_lo
             clc
             adc #<(AUDIO_DATA_OFFSET-1)
@@ -242,17 +245,16 @@ _audio_decode_frequency_lead
 ; --- Canonical Huffman Decoder ---
 
 audio_stream_read_symbol:
-            sta curr_code_len
             sty first_idx 
+            tay
             lda #0
             sta symbol
             sta first_code
             ldx audio_stream_idx
 _symbol_read_next_bit
-            jsr audio_stream_read_bit
+            READ_BIT
             rol symbol
-            inc curr_code_len
-            ldy curr_code_len
+            iny
             lda symbol 
             sec
             sbc CODEBOOK_LENGTHS,y
@@ -270,6 +272,7 @@ _symbol_read_next_bit
             clc
             adc first_idx
             sta first_idx
+
             jmp _symbol_read_next_bit
 _return_symbol:
             lda symbol         ; huffman coded symbol
@@ -309,24 +312,26 @@ _audio_stream_save_return
             rts
 
 audio_stream_read_address
+            ldx audio_stream_idx
             ; jump to a location on the data stream
             ; 15 bits of address coords on stack
             ;  hhhhlll lllllsss - h = high bits, l = low bits, s = shift
-            jsr audio_stream_read_bit
+            READ_BIT
             bcs _audio_stream_read_in_stream
-            ldy #ADDRESS_BITS - 1
+            ldy #(ADDRESS_INDEX_BITS - 1)
             jsr audio_stream_read_bits
             tay
             lda AUDIO_JUMP_TABLE_LO_START,y
             sta audio_stream_next_addr_lo
             lda AUDIO_JUMP_TABLE_HI_START,y
+            and #$0f
             sta audio_stream_next_addr_hi
             lda AUDIO_JUMP_TABLE_HI_START,y
             lsr
             lsr
             lsr
             lsr
-            bmi _audio_stream_read_return ; always negative
+            bpl _audio_stream_read_return
 _audio_stream_read_in_stream
             ldy #(ADDRESS_BITS_HI - 1)
             jsr audio_stream_read_bits
@@ -337,13 +342,15 @@ _audio_stream_read_in_stream
             ldy #(ADDRESS_BITS_BUF - 1)
             jsr audio_stream_read_bits
 _audio_stream_read_return
+            sta audio_stream_next_addr_buf
             rts
 
 audio_stream_skip_address
-            jsr audio_stream_read_bit
-            ldy #ADDRESS_INDEX_BITS - 1
+            ldx audio_stream_idx
+            READ_BIT
+            ldy #(ADDRESS_INDEX_BITS - 1)
             bcc _audio_skip_bits
-            ldy #ADDRESS_BITS - 1
+            ldy #(ADDRESS_BITS - 1)
 _audio_skip_bits
             jsr audio_stream_read_bits
             rts
@@ -353,29 +360,28 @@ audio_stream_read_bits
             sta symbol
             ldx audio_stream_idx
 _read_bits_loop
-            jsr audio_stream_read_bit
+            READ_BIT
             rol symbol
             dey
             bpl _read_bits_loop
             lda symbol
             rts
 
+    ENDM
+
+    MAC READ_BIT
             ; read one data bit from audio stream
             ; uses a sentinel bit and a few tricks picked up from
             ; http://forum.6502.org/viewtopic.php?f=2&t=4642    
-audio_stream_read_bit
             lsr audio_stream_buf,x
-            bne _audio_read_bit_end
+            bne ._audio_read_bit_end
             inc audio_stream_lo,x
-            bne _audio_read_bit_same_page
+            bne ._audio_read_bit_same_page
             inc audio_stream_hi,x
-_audio_read_bit_same_page
+._audio_read_bit_same_page
             lda (audio_stream_ptr,x)
             sec ; set sentinel bit
             ror
             sta audio_stream_buf,x
-_audio_read_bit_end
-            rts
-
-
+._audio_read_bit_end
     ENDM

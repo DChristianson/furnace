@@ -375,6 +375,10 @@ int GET_CODE_CHANNEL(const AlphaCode c) {
   return (c >> 40) & 0xff;
 }
 
+size_t BITSTREAM_ADDR(size_t addr) {
+  return ((addr << 1) & 0xff0) | (addr & 0x7);
+}
+
 // BUGBUG: STATS
 size_t CALC_ENTROPY(const std::map<AlphaCode, size_t> &frequencyMap) {
   double entropy = 0;
@@ -1106,37 +1110,37 @@ void DivExportTIAZip::encodeBitstreamDynamic(
         CODE_TYPE type = GET_CODE_TYPE(c);
         switch (type) {
           case CODE_TYPE::BRANCH_POINT: {
-            logD("DATA %d %d - BRANCH_POINT", subsong, channel);
+            logD("DATA %d %d %08x - BRANCH_POINT", subsong, channel, BITSTREAM_ADDR(dataStream->position()));
             dataStream->writeBits(abstractCodeIndex.at(CODE_BRANCH_POINT));
             break;
           }
 
           case CODE_TYPE::TAKE_DATA_JUMP: {
-            logD("DATA %d %d - TAKE_DATA_JUMP", subsong, channel);
+            logD("DATA %d %d %08x - TAKE_DATA_JUMP", subsong, channel, BITSTREAM_ADDR(dataStream->position()));
             dataStream->writeBits(abstractCodeIndex.at(CODE_TAKE_DATA_JUMP));
             break;
           }
 
           case CODE_TYPE::WRITE_REGISTERS: {
             AlphaCode ac = GET_CODE_WRITE_REGISTERS_MASKED(c); 
+            logD("DATA %d %d %08x - WRITE_REGISTERS", subsong, channel, BITSTREAM_ADDR(dataStream->position()));
             dataStream->writeBits(abstractCodeIndex.at(ac));
-            logD("DATA %d %d - WRITE_REGISTERS", subsong, channel);
             CHANGE_STATE cc = GET_CODE_WRITE_CC(c);
             if (cc == CHANGE_STATE::CHANGE) {
               unsigned char cx = GET_CODE_WRITE_CX(c);
-              logD("DATA %d %d - CX %d", subsong, channel, cx);
+              logD("DATA %d %d %08x - CX %d", subsong, channel, BITSTREAM_ADDR(dataStream->position()), cx);
               dataStream->writeBits(controlCodeIndex.at(cx));
             }
             CHANGE_STATE fc = GET_CODE_WRITE_FC(c);
             if (fc == CHANGE_STATE::CHANGE) {
               unsigned char fx = GET_CODE_WRITE_FX(c);
-              logD("DATA %d %d - FX %d", subsong, channel, fx);
+              logD("DATA %d %d %08x- FX %d", subsong, channel, BITSTREAM_ADDR(dataStream->position()), fx);
               dataStream->writeBits(frequencyCodeIndex.at(fx));
             }
             CHANGE_STATE vc = GET_CODE_WRITE_VC(c);
             if (vc == CHANGE_STATE::CHANGE) {
               unsigned char vx = GET_CODE_WRITE_VX(c);
-              logD("DATA %d %d - VX %d", subsong, channel, vx);
+              logD("DATA %d %d %08x - VX %d", subsong, channel, BITSTREAM_ADDR(dataStream->position()), vx);
               dataStream->writeBits(volumeCodeIndex.at(vx));
             }
             // duration always 1
@@ -1146,30 +1150,30 @@ void DivExportTIAZip::encodeBitstreamDynamic(
           }
 
           case CODE_TYPE::VOL_INC: {
-            logD("DATA %d %d - VOL_INC", subsong, channel);
+            logD("DATA %d %d %08x - VOL_INC", subsong, channel, BITSTREAM_ADDR(dataStream->position()));
             dataStream->writeBits(abstractCodeIndex.at(CODE_VOL_INC));
             break;
           }
 
           case CODE_TYPE::VOL_DEC: {
-            logD("DATA %d %d - VOL_DEC", subsong, channel);
+            logD("DATA %d %d %08x - VOL_DEC", subsong, channel, BITSTREAM_ADDR(dataStream->position()));
             dataStream->writeBits(abstractCodeIndex.at(CODE_VOL_DEC));
             break;
           }
 
           case CODE_TYPE::PAUSE: {
-            dataStream->writeBits(abstractCodeIndex.at(CODE_PAUSE_0));
             unsigned char duration = GET_CODE_WRITE_DURATION(c);
+            logD("DATA %d %d %08x - PAUSE %d", subsong, channel, BITSTREAM_ADDR(dataStream->position()), duration);
+            dataStream->writeBits(abstractCodeIndex.at(CODE_PAUSE_0));
             dataStream->writeBits(durationCodeIndex.at(duration));
-            logD("DATA %d %d - PAUSE %d", subsong, channel, duration);
             break;
           }
 
           case CODE_TYPE::SUSTAIN: {
-            dataStream->writeBits(abstractCodeIndex.at(CODE_SUSTAIN_0));
             unsigned char duration = GET_CODE_WRITE_DURATION(c);
+            logD("DATA %d %d %08x - SUSTAIN %d", subsong, channel, BITSTREAM_ADDR(dataStream->position()), duration);
+            dataStream->writeBits(abstractCodeIndex.at(CODE_SUSTAIN_0));
             dataStream->writeBits(durationCodeIndex.at(duration));
-            logD("DATA %d %d - SUSTAIN %d", subsong, channel, duration);
             break;
           }
 
@@ -1178,14 +1182,14 @@ void DivExportTIAZip::encodeBitstreamDynamic(
             auto ij = jumpMap.find(c);
             if (ij != jumpMap.end()) {
               size_t index = (*ij).second;
+              logD("DATA %d %d %08x - JUMP TABLE %d", subsong, channel, BITSTREAM_ADDR(dataStream->position()), index);
               dataStream->writeBit(false); // is lookup
               dataStream->writeBits(index, addressIndexBits);
-              logD("DATA %d %d - JUMP TABLE %d", subsong, channel, index);
             } else {
+              logD("DATA %d %d %08x - JUMP ADDRESS %08x", subsong, channel, BITSTREAM_ADDR(dataStream->position()), address);
               dataStream->writeBit(true); // no lookup
               dataStreamPointerMap[dataStream->position()] = address;
               dataStream->writeBits(address, addressBits);
-              logD("DATA %d %d - JUMP ADDRESS %08x", subsong, channel, address);
             }
             break;
           }
@@ -1200,7 +1204,7 @@ void DivExportTIAZip::encodeBitstreamDynamic(
         dataStream->seek(x.first);
         size_t address = positionMap[x.second];
         dataStream->writeBits(address, addressBits);
-        logD("DATA %d %d - REMAP JUMP ADDRESS@%08x: %08x -> %08x", subsong, channel, x.first, x.second, address);
+        logD("DATA %d %d - REMAP JUMP ADDRESS@%08x: %08x -> %08x", subsong, channel, BITSTREAM_ADDR(x.first), x.second, BITSTREAM_ADDR(address));
       }
 
       // produce track stream
@@ -1212,46 +1216,46 @@ void DivExportTIAZip::encodeBitstreamDynamic(
       for (size_t i = 0; i < spanSequence.size(); i++) {
         AlphaCode s = spanSequence[i];
         if (s == CODE_STOP) {
-          logD("SPAN %d %d - STOP", subsong, channel);
+          logD("SPAN %d %d %08x - STOP", subsong, channel, BITSTREAM_ADDR(trackStream->position()));
           trackStream->writeBits(spanCodeIndex.at(CODE_STOP));
 
         } else if (s == CODE_RETURN_LAST) {
-          logD("SPAN %d %d - RETURN_LAST", subsong, channel);
+          logD("SPAN %d %d %08x - RETURN_LAST", subsong, channel, BITSTREAM_ADDR(trackStream->position()));
           trackStream->writeBits(spanCodeIndex.at(CODE_RETURN_LAST));          
 
         } else if (s == CODE_RETURN_FF) {
-          logD("SPAN %d %d - RETURN_FF", subsong, channel);
+          logD("SPAN %d %d %08x - RETURN_FF", subsong, channel, BITSTREAM_ADDR(trackStream->position()));
           trackStream->writeBits(spanCodeIndex.at(CODE_RETURN_FF));
         
         } else if (s == CODE_RETURN_NOOP) {
           // pass
 
         } else if (s == CODE_SKIP) {
-          logD("SPAN %d %d - SKIP", subsong, channel);
+          logD("SPAN %d %d %08x - SKIP", subsong, channel, BITSTREAM_ADDR(trackStream->position()));
           trackStream->writeBits(spanCodeIndex.at(CODE_SKIP));
 
         } else if (s == CODE_TAKE_DATA_JUMP) {
-          logD("SPAN %d %d - DATA_JUMP", subsong, channel);
+          logD("SPAN %d %d %08x - DATA_JUMP", subsong, channel, BITSTREAM_ADDR(trackStream->position()));
           trackStream->writeBits(spanCodeIndex.at(CODE_TAKE_DATA_JUMP));
 
         } else if (s == CODE_TAKE_TRACK_JUMP) {
-          logD("SPAN %d %d - TRACK_JUMP", subsong, channel);
+          logD("SPAN %d %d %08x - TRACK_JUMP", subsong, channel, BITSTREAM_ADDR(trackStream->position()));
           trackStream->writeBits(spanCodeIndex.at(CODE_TAKE_TRACK_JUMP));
           i++;
           s = spanSequence[i];
           auto ij = jumpMap.find(s);
           if (ij != jumpMap.end()) {
             size_t index = (*ij).second;
+            logD("SPAN %d %d %08x - JUMP TABLE %08x", subsong, channel, BITSTREAM_ADDR(trackStream->position()), index);
             trackStream->writeBit(false); // is lookup
             trackStream->writeBits(index, addressIndexBits);
-            logD("SPAN %d %d - JUMP TABLE %08x", subsong, channel, index);
 
           } else {
             size_t address = GET_CODE_JUMP_ADDRESS(s);
+            logD("SPAN %d %d %08x - JUMP ADDRESS %08x", subsong, channel, BITSTREAM_ADDR(trackStream->position()), address);
             trackStream->writeBit(true); // no lookup
             trackStreamPointerMap[trackStream->position()] = address;
             trackStream->writeBits(address, addressBits);
-            logD("SPAN %d %d - JUMP ADDRESS %08x", subsong, channel, address);
 
           }
         } else {
@@ -1265,7 +1269,7 @@ void DivExportTIAZip::encodeBitstreamDynamic(
         trackStream->seek(x.first);
         size_t address = positionMap[x.second];
         trackStream->writeBits(address, addressBits);
-        logD("TRACK %d %d - REMAP JUMP ADDRESS@%08x: %08x -> %08x", subsong, channel, x.first, x.second, address);
+        logD("TRACK %d %d - REMAP JUMP ADDRESS@%08x: %08x -> %08x", subsong, channel, BITSTREAM_ADDR(x.first), x.second, BITSTREAM_ADDR(address));
       }
 
       for (auto& x : jumpMap) {
@@ -1530,12 +1534,12 @@ void DivExportTIAZip::encodeBitstreamDynamic(
   // 0hhhhlll lllllsss stored as 0ssshhhh llllllll
   trackData->writeText(fmt::sprintf("\nAUDIO_JUMP_TABLE_LO_START"));
   for (auto addr : jumpAddresses) {
-      trackData->writeText(fmt::sprintf("\n    byte $%02x", (addr >> 3) & 0xff));
+      trackData->writeText(fmt::sprintf("\n    byte $%02x ; <%02x", (addr >> 3) & 0xff, addr));
       totalCompressedBytes += 1;
   }
   trackData->writeText(fmt::sprintf("\nAUDIO_JUMP_TABLE_HI_START"));
   for (auto addr : jumpAddresses) {
-      trackData->writeText(fmt::sprintf("\n    byte $%02x", ((addr << 4) & 0x70) | ((addr >> 11) & 0x0f)));
+      trackData->writeText(fmt::sprintf("\n    byte $%02x ; >%02x", ((addr & 0x07) << 4) | ((addr >> 11) & 0x0f), addr));
       totalCompressedBytes += 1;
   }
 
@@ -1864,11 +1868,12 @@ size_t DivExportTIAZip::encodeChannelStateCodes(
 
   unsigned char audcx = next.registers[0];
   unsigned char audfx = next.registers[1];
-  // normalize lead voice 12 to 4
-  if (audcx == 12) {
-    audcx = 0x04;
-    audfx += 0x20;
-  }
+  // BUGBUG
+  // // normalize lead voice 12 to 4
+  // if (audcx == 12) {
+  //   audcx = 0x04;
+  //   audfx += 0x20;
+  // }
   unsigned char audvx = next.registers[2];
   CHANGE_STATE cc = audcx != last.registers[0] ? CHANGE_STATE::CHANGE : CHANGE_STATE::NOOP;
   CHANGE_STATE fc = audfx != last.registers[1] ? CHANGE_STATE::CHANGE : CHANGE_STATE::NOOP;
@@ -1883,7 +1888,6 @@ size_t DivExportTIAZip::encodeChannelStateCodes(
   // BUGBUG: this is important, a sustain is likely to come after a node
   // maybe not a pause
   unsigned char dx = 1; // framecount > 2 ? 2 : framecount;
-  framecount = framecount - dx;
 
   // BUGBUG: this is also important, seldom make control changes by themselves
   if (cc > 0) {
@@ -1916,6 +1920,9 @@ size_t DivExportTIAZip::encodeChannelStateCodes(
       out.emplace_back(CODE_WRITE_REGISTERS(cc, 0, fc, 0, vc, audvx, dx));
     }
     codesWritten++;
+  }
+  if (codesWritten > 0) {
+    framecount = framecount - dx;
   }
 
   while (framecount > 0) {
