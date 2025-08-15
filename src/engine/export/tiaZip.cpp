@@ -1544,13 +1544,13 @@ void DivExportTIAZip::encodeBitstreamDynamic(
   }
 
   // write control and decoder tables
-  trackData->writeText(fmt::sprintf("\nCODEBOOK_LENGTHS = . - 1"));
-  totalCompressedBytes += writeCodebookLengths(trackData, "audio_decode_command", abstractCodebook);
-  totalCompressedBytes += writeCodebookLengths(trackData, "audio_decode_span", spanCodebook);
-  totalCompressedBytes += writeCodebookLengths(trackData, "audio_decode_control", controlCodebook);
-  totalCompressedBytes += writeCodebookLengths(trackData, "audio_decode_frequency", frequencyCodebook);
-  totalCompressedBytes += writeCodebookLengths(trackData, "audio_decode_volume", volumeCodebook);
-  totalCompressedBytes += writeCodebookLengths(trackData, "audio_decode_duration", durationCodebook);
+  trackData->writeText(fmt::sprintf("\nCODEBOOK_LADDER"));
+  totalCompressedBytes += writeCodebookLadder(trackData, "audio_decode_command", abstractCodebook, abstractCodeIndex);
+  totalCompressedBytes += writeCodebookLadder(trackData, "audio_decode_span", spanCodebook, spanCodeIndex);
+  totalCompressedBytes += writeCodebookLadder(trackData, "audio_decode_control", controlCodebook, controlCodeIndex);
+  totalCompressedBytes += writeCodebookLadder(trackData, "audio_decode_frequency", frequencyCodebook, frequencyCodeIndex);
+  totalCompressedBytes += writeCodebookLadder(trackData, "audio_decode_volume", volumeCodebook, volumeCodeIndex);
+  totalCompressedBytes += writeCodebookLadder(trackData, "audio_decode_duration", durationCodebook, durationCodeIndex);
 
   // codes
   trackData->writeText(fmt::sprintf("\nCODEBOOK_CODES"));
@@ -1618,6 +1618,33 @@ size_t DivExportTIAZip::writeCodebookLengths(
   if (total > 0) {
     w->writeText(fmt::sprintf("\n    byte %d", total));
     bytesWritten +=1;
+  }
+  return bytesWritten;
+}
+
+size_t DivExportTIAZip::writeCodebookLadder(
+  SafeWriter *w,
+  const char *label,
+  const std::vector<std::pair<AlphaCode, size_t>> &codebook,
+  const std::map<AlphaCode, std::vector<bool>> &codeIndex
+) {
+  size_t bytesWritten = 0;
+  w->writeText(fmt::sprintf("\n%s_LADDER = . - CODEBOOK_LADDER", label));
+  for (auto &pair : codebook) {
+    if (pair.second == 0) {
+      continue;
+    }
+    AlphaCode c = pair.first;
+    String bitcode = "1";
+    auto it = codeIndex.find(c);
+    if (it != codeIndex.end()) {
+      auto &bitvec = (*it).second;  
+      for (int i = bitvec.size(); --i >= 0; ) {
+        bitcode += bitvec.at(i) ? "1" : "0";
+      }
+    }
+    w->writeText(fmt::sprintf("\n    byte %%%s", bitcode));
+    bytesWritten += 1;
   }
   return bytesWritten;
 }
@@ -1731,7 +1758,6 @@ void DivExportTIAZip::writeCodebookMacro(
     w->writeText(fmt::sprintf("    lda #%d\n", code));
 
   } else {
-    w->writeText(fmt::sprintf("    lda #%s_LENGTHS\n", label));
     w->writeText(fmt::sprintf("    ldy #%s_CODES\n", label));
     w->writeText("    jsr audio_stream_read_symbol\n");
   }

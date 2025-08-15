@@ -60,7 +60,6 @@ audio_fx = AUDF0
 audio_vx = AUDV0 
     ENDIF
 
-
     MAC AUDIO_CONTROLS
 audio_inc_track
             ldy audio_track
@@ -157,7 +156,7 @@ CODE_PAUSE:
 CODE_SUSTAIN:
             audio_decode_duration_MACRO
             sta audio_timer,x
-            bcc _audio_update_next_channel
+            jmp _audio_update_next_channel
 CODE_BRANCH_POINT:
             lda SPAN_IDX,x
             sta audio_stream_idx
@@ -211,7 +210,6 @@ CODE_TAKE_DATA_JUMP:
             jsr audio_stream_read_address
             jsr audio_stream_save_context
 _audio_seek
-            ldy audio_stream_next_addr_buf
             lda audio_stream_next_addr_lo
             clc
             adc #<(AUDIO_DATA_OFFSET-1)
@@ -222,9 +220,12 @@ _audio_seek
 _audio_do_shift
             lda #0
             sta audio_stream_buf,x
+            ldy audio_stream_next_addr_buf
+            beq _audio_skip_shift
+_audio_do_shift_loop
+            READ_BIT
             dey
-            bmi _audio_skip_shift
-            jsr audio_stream_read_bits
+            bne _audio_do_shift_loop
 _audio_skip_shift
             ldx audio_channel_idx
             jmp _audio_update_next_command            
@@ -245,42 +246,20 @@ _audio_decode_frequency_lead
 ; --- Canonical Huffman Decoder ---
 
 audio_stream_read_symbol:
-            sty first_idx 
-            tay
-            lda #0
+            lda #1
             sta symbol
-            sta first_code
             ldx audio_stream_idx
 _symbol_read_next_bit
             READ_BIT
             rol symbol
-            iny
             lda symbol 
-            sec
-            sbc CODEBOOK_LENGTHS,y
-            bcc _return_symbol
-            cmp first_code
-            bcc _return_symbol
-
-            lda CODEBOOK_LENGTHS,y ; first_code = (first_code + count[curr_len]) << 1
-            clc
-            adc first_code
-            asl
-            sta first_code
-            
-            lda CODEBOOK_LENGTHS,y ; first_idx = first_idx + count[curr_len]
-            clc
-            adc first_idx
-            sta first_idx
-
-            jmp _symbol_read_next_bit
+_symbol_climb_ladder
+            cmp CODEBOOK_LADDER,y
+            bcc _symbol_read_next_bit
+            beq _return_symbol
+            iny
+            bpl _symbol_climb_ladder
 _return_symbol:
-            lda symbol         ; huffman coded symbol
-            sec
-            sbc first_code      ; offset = curr_code - first_code
-            clc
-            adc first_idx      ; symbol index = offset + symbol_off
-            tay
             lda CODEBOOK_CODES,y
             ldx audio_channel_idx
             rts
@@ -318,7 +297,7 @@ audio_stream_read_address
             ;  hhhhlll lllllsss - h = high bits, l = low bits, s = shift
             READ_BIT
             bcs _audio_stream_read_in_stream
-            ldy #(ADDRESS_INDEX_BITS - 1)
+            lda #%11110000
             jsr audio_stream_read_bits
             tay
             lda AUDIO_JUMP_TABLE_LO_START,y
@@ -333,13 +312,13 @@ audio_stream_read_address
             lsr
             bpl _audio_stream_read_return
 _audio_stream_read_in_stream
-            ldy #(ADDRESS_BITS_HI - 1)
+            lda #%11100000
             jsr audio_stream_read_bits
             sta audio_stream_next_addr_hi
-            ldy #(ADDRESS_BITS_LO - 1)
+            lda #%11111110
             jsr audio_stream_read_bits
             sta audio_stream_next_addr_lo
-            ldy #(ADDRESS_BITS_BUF - 1)
+            lda #%11000000
             jsr audio_stream_read_bits
 _audio_stream_read_return
             sta audio_stream_next_addr_buf
@@ -352,18 +331,18 @@ audio_stream_skip_address
             bcc _audio_skip_bits
             ldy #(ADDRESS_BITS - 1)
 _audio_skip_bits
-            jsr audio_stream_read_bits
+            READ_BIT
+            dey
+            bpl _audio_skip_bits
             rts
 
 audio_stream_read_bits
-            lda #0
             sta symbol
             ldx audio_stream_idx
 _read_bits_loop
             READ_BIT
             rol symbol
-            dey
-            bpl _read_bits_loop
+            bcs _read_bits_loop
             lda symbol
             rts
 

@@ -87,6 +87,12 @@ class DivExportTIAZip : public DivROMExport {
     const char *label,
     const std::vector<std::pair<AlphaCode, size_t>> &codebook
   );
+  size_t writeCodebookLadder(
+    SafeWriter* w,
+    const char *label,
+    const std::vector<std::pair<AlphaCode, size_t>> &codebook,
+    const std::map<AlphaCode, std::vector<bool>> &codeIndex
+  );
   size_t writeCommandCodes(
     SafeWriter* w,
     const char *label,
