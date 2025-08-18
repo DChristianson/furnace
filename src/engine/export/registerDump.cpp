@@ -113,7 +113,7 @@ RegisterDump::RegisterDump(
  */
 void RegisterDump::writeChannelStateSequence(
   int systemIndex,
-  int suppressVolume,
+  int suppressVolumeRegister,
   const std::map<unsigned int, unsigned int> &addressMap,
   ChannelStateSequence &dumpSequence 
 ) {
@@ -142,8 +142,8 @@ void RegisterDump::writeChannelStateSequence(
       if (lastWriteIndex >= 0) {
         auto lastState = currentState;
         // if volume register is zero, clear all registers
-        if (suppressVolume >= 0) {
-          if (lastState.registers[suppressVolume] == 0) {
+        if (suppressVolumeRegister >= 0) {
+          if (lastState.registers[suppressVolumeRegister] == 0) {
             lastState.clear();
           }
         }
@@ -179,7 +179,7 @@ void RegisterDump::writeChannelStateSequence(
 void RegisterDump::writeChannelStateSequenceByRow(
   int channel,
   int systemIndex,
-  int suppressVolume,
+  int suppressVolumeRegister,
   const std::map<unsigned int, unsigned int> &addressMap,
   std::map<String, ChannelStateSequence> &dumpSequenceMap 
 ) {
@@ -211,8 +211,8 @@ void RegisterDump::writeChannelStateSequenceByRow(
       if (lastWriteIndex >= 0) {
         auto lastState = currentState;
         // if volume register is zero, clear all registers
-        if (suppressVolume >= 0) {
-          if (lastState.registers[suppressVolume] == 0) {
+        if (suppressVolumeRegister >= 0) {
+          if (lastState.registers[suppressVolumeRegister] == 0) {
             lastState.clear();
           }
         }

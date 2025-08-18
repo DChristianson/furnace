@@ -92,6 +92,21 @@ public:
 
 };
 
+struct CodebookEntry {
+
+  AlphaCode code;
+  size_t weight;
+  size_t height;
+
+  CodebookEntry(AlphaCode c, size_t weight, size_t height) : 
+    code(c),
+    weight(weight),
+    height(height) {}
+
+};
+
+bool compareCodebookEntryHeight(CodebookEntry &a, CodebookEntry &b);
+
 /**
  * Huffman code tree. Used to build a optimal encoding of an arbitrary set of codes based on their
  * relative frequencies.
@@ -144,6 +159,7 @@ struct HuffmanTree {
     assert(code == 0);
     assert(tree != NULL);
     assert(left == NULL);
+    assert(tree->parent == NULL);
     left = tree;
     tree->parent = this;
     updateWeights();
@@ -153,6 +169,7 @@ struct HuffmanTree {
     assert(code == 0);
     assert(tree != NULL);
     assert(right == NULL);
+    assert(tree->parent == NULL);
     right = tree;
     tree->parent = this;
     updateWeights();
@@ -209,7 +226,7 @@ struct HuffmanTree {
   /**
    * Convert a tree to canonical form.
    */
-  void buildCanonicalCodebook(std::vector<std::pair<AlphaCode, size_t>> &codebook);
+  void buildCanonicalCodebook(size_t maxBits, std::vector<CodebookEntry> &codebook);
 
 };
 
@@ -225,15 +242,16 @@ class CompareHuffmanTreeWeights {
 };
 
 HuffmanTree *buildHuffmanTreeFromCodebook(
-  const std::vector<std::pair<AlphaCode, size_t>> &codebook
+  const std::vector<CodebookEntry> &codebook
 );
 
 HuffmanTree *buildHuffmanTree(
   const std::map<AlphaCode, size_t> &frequencyMap,
-  size_t limit,
+  size_t nodeLimit,
   size_t minWeight,
-  AlphaCode literal,
-  std::vector<std::pair<AlphaCode, size_t>> &codebook
+  size_t maxBits,
+  AlphaCode literalCode,
+  std::vector<CodebookEntry> &codebook
 );
 
 #endif // _HUFFMAN_H

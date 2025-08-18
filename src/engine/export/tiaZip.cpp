@@ -122,6 +122,10 @@
 //        - tested: complex example
 //    - zip with 4 channel isolation, huffman and bank switching
 //        - tested: complex example
+//  - compression goals
+//    - Coconut Mall 4k
+//        - ADSR to handle volume?
+//        - span compression analysis?
 //  - debugging
 //    - proper analytic debug output for TIAZIP spans
 //  - glitch
@@ -467,7 +471,7 @@ void DivExportTIAZip::writeTrackDataTIAZip(int compressionLevel) {
       ChannelStateSequence dumpSequence(ChannelState(0), 16);
       registerDump->writeChannelStateSequence(
         0,
-        -1,
+        -1, // channel == 0 ? AUDV0 : AUDV1,
         channel == 0 ? tiaChannel0AddressMap : tiaChannel1AddressMap,
         dumpSequence
       );
@@ -1038,48 +1042,49 @@ void DivExportTIAZip::encodeBitstreamDynamic(
   bool enableHuffmanCodes = true;
   size_t maxHuffmanCodes = 128;
   size_t minWeight = 0;
+  size_t maxBits = 7;
 
 
   logD("code tree");
-  std::vector<std::pair<AlphaCode, size_t>> abstractCodebook;
+  std::vector<CodebookEntry> abstractCodebook;
   HuffmanTree *abstractCodeTree = enableHuffmanCodes ?
-    buildHuffmanTree(abstractFrequencyMap, maxHuffmanCodes, minWeight, CODE_WRITE_REGISTERS_000, abstractCodebook) : 
+    buildHuffmanTree(abstractFrequencyMap, maxHuffmanCodes, minWeight, maxBits, CODE_WRITE_REGISTERS_000, abstractCodebook) : 
     new HuffmanTree(CODE_WRITE_REGISTERS_000, 1);
   std::map<AlphaCode, std::vector<bool>> abstractCodeIndex;
   abstractCodeTree->buildIndex(abstractCodeIndex);
   SHOW_TREE(abstractFrequencyMap, abstractCodeIndex, CODE_WRITE_REGISTERS_000);
 
   logD("span tree");
-  std::vector<std::pair<AlphaCode, size_t>> spanCodebook;
-  HuffmanTree *spanTree = buildHuffmanTree(spanFrequencyMap, maxHuffmanCodes, minWeight, 0, spanCodebook);
+  std::vector<CodebookEntry> spanCodebook;
+  HuffmanTree *spanTree = buildHuffmanTree(spanFrequencyMap, maxHuffmanCodes, minWeight, maxBits, 0, spanCodebook);
   std::map<AlphaCode, std::vector<bool>> spanCodeIndex;
   spanTree->buildIndex(spanCodeIndex);
   SHOW_TREE(spanFrequencyMap, spanCodeIndex, 0);
 
   logD("control tree");
-  std::vector<std::pair<AlphaCode, size_t>> controlCodebook;
-  HuffmanTree *controlTree = buildHuffmanTree(controlFrequencyMap, maxHuffmanCodes, minWeight, 0, controlCodebook);
+  std::vector<CodebookEntry> controlCodebook;
+  HuffmanTree *controlTree = buildHuffmanTree(controlFrequencyMap, maxHuffmanCodes, minWeight, maxBits, 0, controlCodebook);
   std::map<AlphaCode, std::vector<bool>> controlCodeIndex;
   controlTree->buildIndex(controlCodeIndex);
   SHOW_TREE(controlFrequencyMap, controlCodeIndex, 0);
 
   logD("frequency tree");
-  std::vector<std::pair<AlphaCode, size_t>> frequencyCodebook;
-  HuffmanTree *frequencyTree = buildHuffmanTree(frequencyFrequencyMap, maxHuffmanCodes, minWeight, 0, frequencyCodebook);
+  std::vector<CodebookEntry> frequencyCodebook;
+  HuffmanTree *frequencyTree = buildHuffmanTree(frequencyFrequencyMap, maxHuffmanCodes, minWeight, maxBits, 0, frequencyCodebook);
   std::map<AlphaCode, std::vector<bool>> frequencyCodeIndex;
   frequencyTree->buildIndex(frequencyCodeIndex);
   SHOW_TREE(frequencyFrequencyMap, frequencyCodeIndex, 0);
 
   logD("volume tree");
-  std::vector<std::pair<AlphaCode, size_t>> volumeCodebook;
-  HuffmanTree *volumeTree = buildHuffmanTree(volumeFrequencyMap, maxHuffmanCodes, minWeight, 0, volumeCodebook);
+  std::vector<CodebookEntry> volumeCodebook;
+  HuffmanTree *volumeTree = buildHuffmanTree(volumeFrequencyMap, maxHuffmanCodes, minWeight, maxBits, 0, volumeCodebook);
   std::map<AlphaCode, std::vector<bool>> volumeCodeIndex;
   volumeTree->buildIndex(volumeCodeIndex);
   SHOW_TREE(volumeFrequencyMap, volumeCodeIndex, 0);
 
   logD("duration tree");
-  std::vector<std::pair<AlphaCode, size_t>> durationCodebook;
-  HuffmanTree *durationTree = buildHuffmanTree(durationFrequencyMap, maxHuffmanCodes, minWeight, 0, durationCodebook);
+  std::vector<CodebookEntry> durationCodebook;
+  HuffmanTree *durationTree = buildHuffmanTree(durationFrequencyMap, maxHuffmanCodes, minWeight, maxBits, 0, durationCodebook);
   std::map<AlphaCode, std::vector<bool>> durationCodeIndex;
   durationTree->buildIndex(durationCodeIndex);
   SHOW_TREE(durationFrequencyMap, durationCodeIndex, 0);
@@ -1301,11 +1306,15 @@ void DivExportTIAZip::encodeBitstreamDynamic(
       size_t i = 0;
       size_t returnAddress = 0;
       size_t maxOffset = 0;
+      AlphaCode lastCommand = 0;
       while (dataStream->hasBits()) {
         size_t streamPosition = dataStream->position();
         AlphaCode code;
         AlphaCode nextCommand = abstractCodeTree->decode(dataStream);
-
+        if (lastCommand == CODE_BRANCH_POINT && nextCommand == CODE_BRANCH_POINT) {
+          logD("SPAN: double branch point at %08x", streamPosition);
+        }
+        lastCommand = nextCommand;
         switch (nextCommand) {
           case CODE_WRITE_REGISTERS_111: {
             CHANGE_STATE cc = CHANGE_STATE::CHANGE;
@@ -1562,7 +1571,7 @@ void DivExportTIAZip::encodeBitstreamDynamic(
   totalCompressedBytes += writeDataCodes(trackData, "audio_decode_duration", durationCodebook, durationCodeIndex);
 
   // macros
-  writeCodebookMacro(trackData, "audio_decode_command", abstractCodebook);
+  writeCodebookMacro(trackData, "audio_decode_command", "audio_data_stream_idx", abstractCodebook);
   if (spanCodebook.size() == 1) {
     // BUGBUG: massive kludge
     trackData->writeText("\n    ; audio_decode_span\n");
@@ -1570,12 +1579,12 @@ void DivExportTIAZip::encodeBitstreamDynamic(
     trackData->writeText("    lda #<CODE_STOP\n");
     trackData->writeText("    ENDM\n\n");
   } else {
-    writeCodebookMacro(trackData, "audio_decode_span", spanCodebook);
+    writeCodebookMacro(trackData, "audio_decode_span", "audio_span_stream_idx", spanCodebook);
   }
-  writeCodebookMacro(trackData, "audio_decode_control", controlCodebook);
-  writeCodebookMacro(trackData, "audio_decode_frequency", frequencyCodebook);
-  writeCodebookMacro(trackData, "audio_decode_volume", volumeCodebook);
-  writeCodebookMacro(trackData, "audio_decode_duration", durationCodebook);
+  writeCodebookMacro(trackData, "audio_decode_control", "audio_data_stream_idx", controlCodebook);
+  writeCodebookMacro(trackData, "audio_decode_frequency", "audio_data_stream_idx", frequencyCodebook);
+  writeCodebookMacro(trackData, "audio_decode_volume", "audio_data_stream_idx", volumeCodebook);
+  writeCodebookMacro(trackData, "audio_decode_duration", "audio_data_stream_idx", durationCodebook);
 
   // cleanup
   delete abstractCodeTree;
@@ -1597,17 +1606,17 @@ void DivExportTIAZip::encodeBitstreamDynamic(
 size_t DivExportTIAZip::writeCodebookLengths(
   SafeWriter *w,
   const char *label,
-  const std::vector<std::pair<AlphaCode, size_t>> &codebook
+  const std::vector<CodebookEntry> &codebook
 ) {
   size_t bytesWritten = 0;
   w->writeText(fmt::sprintf("\n%s_LENGTHS = . - CODEBOOK_LENGTHS - 1", label));
   size_t currentLength = 1;
   size_t total = 0;
-  for (auto &pair : codebook) {
-    if (pair.second == 0) {
+  for (auto &entry : codebook) {
+    if (entry.height == 0) {
       continue;
     }
-    while (pair.second > currentLength) {
+    while (entry.height > currentLength) {
       w->writeText(fmt::sprintf("\n    byte %d", total));
       bytesWritten += 1;
       currentLength += 1;
@@ -1625,18 +1634,18 @@ size_t DivExportTIAZip::writeCodebookLengths(
 size_t DivExportTIAZip::writeCodebookLadder(
   SafeWriter *w,
   const char *label,
-  const std::vector<std::pair<AlphaCode, size_t>> &codebook,
+  const std::vector<CodebookEntry> &codebook,
   const std::map<AlphaCode, std::vector<bool>> &codeIndex
 ) {
   size_t bytesWritten = 0;
   w->writeText(fmt::sprintf("\n%s_LADDER = . - CODEBOOK_LADDER", label));
-  for (auto &pair : codebook) {
-    if (pair.second == 0) {
+  for (auto &entry : codebook) {
+    if (entry.height == 0) {
       continue;
     }
-    AlphaCode c = pair.first;
+    AlphaCode code = entry.code;
     String bitcode = "1";
-    auto it = codeIndex.find(c);
+    auto it = codeIndex.find(code);
     if (it != codeIndex.end()) {
       auto &bitvec = (*it).second;  
       for (int i = bitvec.size(); --i >= 0; ) {
@@ -1652,40 +1661,40 @@ size_t DivExportTIAZip::writeCodebookLadder(
 size_t DivExportTIAZip::writeCommandCodes(
   SafeWriter *w,
   const char *label,
-  const std::vector<std::pair<AlphaCode, size_t>> &codebook,
+  const std::vector<CodebookEntry> &codebook,
   const std::map<AlphaCode, std::vector<bool>> &codeIndex
 ) {
   size_t bytesWritten = 0;  
   w->writeText(fmt::sprintf("\n%s_CODES = . - CODEBOOK_CODES", label));
-  for (auto &pair : codebook) {
-    if (pair.second == 0) {
+  for (auto &entry : codebook) {
+    if (entry.height == 0) {
       continue;
     }
-    AlphaCode c = pair.first;
-    CODE_TYPE type = GET_CODE_TYPE(c);
+    AlphaCode code = entry.code;
+    CODE_TYPE type = GET_CODE_TYPE(code);
     String bitcode = "";
-    auto it = codeIndex.find(c);
+    auto it = codeIndex.find(code);
     if (it != codeIndex.end()) {
       auto &bitvec = (*it).second;  
       for (int i = bitvec.size(); --i >= 0; ) {
         bitcode += bitvec.at(i) ? "1" : "0";
       }
     }
-    if (c == CODE_BRANCH_POINT) {
+    if (code == CODE_BRANCH_POINT) {
       w->writeText(fmt::sprintf("\n    byte <CODE_BRANCH_POINT; %s", bitcode));
-    } else if (c == CODE_TAKE_DATA_JUMP) {
+    } else if (code == CODE_TAKE_DATA_JUMP) {
       w->writeText(fmt::sprintf("\n    byte <CODE_TAKE_DATA_JUMP; %s", bitcode));
-    } else if (c == CODE_TAKE_TRACK_JUMP) {
+    } else if (code == CODE_TAKE_TRACK_JUMP) {
       w->writeText(fmt::sprintf("\n    byte <CODE_TAKE_TRACK_JUMP; %s", bitcode));
-    } else if (c == CODE_STOP) {
+    } else if (code == CODE_STOP) {
       w->writeText(fmt::sprintf("\n    byte <CODE_STOP; %s", bitcode));
-    } else if (c == CODE_RETURN_LAST) {
+    } else if (code == CODE_RETURN_LAST) {
       w->writeText(fmt::sprintf("\n    byte <CODE_RETURN_LAST; %s", bitcode));
-    } else if (c == CODE_RETURN_FF) {
+    } else if (code == CODE_RETURN_FF) {
       w->writeText(fmt::sprintf("\n    byte <CODE_RETURN_FF; %s", bitcode));        
-    } else if (c == CODE_RETURN_NOOP) {
+    } else if (code == CODE_RETURN_NOOP) {
       w->writeText(fmt::sprintf("\n    byte <CODE_RETURN_NOOP; %s", bitcode));
-    } else if (c == CODE_SKIP) {
+    } else if (code == CODE_SKIP) {
       w->writeText(fmt::sprintf("\n    byte <CODE_SKIP; %s", bitcode));
     } else if (type == CODE_TYPE::JUMP) {
       w->writeText(fmt::sprintf("\n    byte <CODE_JUMP; %s", bitcode));
@@ -1698,13 +1707,13 @@ size_t DivExportTIAZip::writeCommandCodes(
     } else if (type == CODE_TYPE::SUSTAIN) {
       w->writeText(fmt::sprintf("\n    byte <CODE_SUSTAIN; %s", bitcode));
     } else if (type == CODE_TYPE::WRITE_REGISTERS) {
-      if (c == CODE_WRITE_REGISTERS_001) {
+      if (code == CODE_WRITE_REGISTERS_001) {
         w->writeText(fmt::sprintf("\n    byte <CODE_WRITE_REGISTERS_001; %s", bitcode));
-      } else if (c == CODE_WRITE_REGISTERS_010) {
+      } else if (code == CODE_WRITE_REGISTERS_010) {
         w->writeText(fmt::sprintf("\n    byte <CODE_WRITE_REGISTERS_010; %s", bitcode));
-      } else if (c == CODE_WRITE_REGISTERS_011) {
+      } else if (code == CODE_WRITE_REGISTERS_011) {
         w->writeText(fmt::sprintf("\n    byte <CODE_WRITE_REGISTERS_011; %s", bitcode));
-      } else if (c == CODE_WRITE_REGISTERS_111) {
+      } else if (code == CODE_WRITE_REGISTERS_111) {
         w->writeText(fmt::sprintf("\n    byte <CODE_WRITE_REGISTERS_111; %s", bitcode));
       } else {
         assert(false);
@@ -1720,26 +1729,26 @@ size_t DivExportTIAZip::writeCommandCodes(
 size_t DivExportTIAZip::writeDataCodes(
   SafeWriter *w,
   const char *label,
-  const std::vector<std::pair<AlphaCode, size_t>> &codebook,
+  const std::vector<CodebookEntry> &codebook,
   const std::map<AlphaCode, std::vector<bool>> &codeIndex
 ) {
   size_t bytesWritten = 0;  
   w->writeText(fmt::sprintf("\n%s_CODES = . - CODEBOOK_CODES", label));
-  for (auto &pair : codebook) {
-    if (pair.second == 0) {
+  for (auto &entry : codebook) {
+    if (entry.height == 0) {
       continue;
     }
-    AlphaCode c = pair.first;
+    AlphaCode code = entry.code;
     String bitcode = "";
-    auto it = codeIndex.find(c);
+    auto it = codeIndex.find(code);
     if (it != codeIndex.end()) {
       auto &bitvec = (*it).second;  
       for (int i = bitvec.size(); --i >= 0; ) {
         bitcode += bitvec.at(i) ? "1" : "0";
       }
     }
-    assert(c < 256);
-    w->writeText(fmt::sprintf("\n    byte %d ; %s", pair.first, bitcode));
+    assert(code < 256);
+    w->writeText(fmt::sprintf("\n    byte %d ; %s", code, bitcode));
     bytesWritten +=1;
   }
   return bytesWritten;
@@ -1749,15 +1758,17 @@ size_t DivExportTIAZip::writeDataCodes(
 void DivExportTIAZip::writeCodebookMacro(
   SafeWriter *w,
   const char *label,
-  const std::vector<std::pair<AlphaCode, size_t>> &codebook
+  const char *track,
+  const std::vector<CodebookEntry> &codebook
 ) {
   w->writeText(fmt::sprintf("\n    ; %s\n", label));
   w->writeText(fmt::sprintf("\n    MAC %s_MACRO\n", label));
   if (codebook.size() == 1) {
-    AlphaCode code = codebook.at(0).first;
+    AlphaCode code = codebook.at(0).code;
     w->writeText(fmt::sprintf("    lda #%d\n", code));
 
   } else {
+    w->writeText(fmt::sprintf("    ldx %s\n", track));
     w->writeText(fmt::sprintf("    ldy #%s_CODES\n", label));
     w->writeText("    jsr audio_stream_read_symbol\n");
   }
@@ -1921,12 +1932,14 @@ size_t DivExportTIAZip::encodeChannelStateCodes(
   };
 
   size_t codesWritten = 0;
-  if (audvx == 0) {
-    assert(dx > 0);
-    // BUGBUG: PAUSE CAN BE LONGER?
-    out.emplace_back(CODE_PAUSE(dx - 1));
-    codesWritten++;
-  } else if (cc + fc > 0) {
+  // BUGBUG: PAUSE problematic 
+  // if (audvx == 0) {
+  //   assert(dx > 0);
+  //   // BUGBUG: PAUSE CAN BE LONGER?
+  //   out.emplace_back(CODE_PAUSE(dx - 1));
+  //   codesWritten++;
+  // } else 
+  if (cc + fc > 0) {
     out.emplace_back(CODE_WRITE_REGISTERS(
       cc,
       cc == CHANGE_STATE::NOOP ? 0 : audcx,

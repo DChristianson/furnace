@@ -85,30 +85,31 @@ class DivExportTIAZip : public DivROMExport {
   size_t writeCodebookLengths(
     SafeWriter* w,
     const char *label,
-    const std::vector<std::pair<AlphaCode, size_t>> &codebook
+    const std::vector<CodebookEntry> &codebook
   );
   size_t writeCodebookLadder(
     SafeWriter* w,
     const char *label,
-    const std::vector<std::pair<AlphaCode, size_t>> &codebook,
+    const std::vector<CodebookEntry> &codebook,
     const std::map<AlphaCode, std::vector<bool>> &codeIndex
   );
   size_t writeCommandCodes(
     SafeWriter* w,
     const char *label,
-    const std::vector<std::pair<AlphaCode, size_t>> &codebook,
+    const std::vector<CodebookEntry> &codebook,
     const std::map<AlphaCode, std::vector<bool>> &codeIndex
   );
   size_t writeDataCodes(
     SafeWriter* w,
     const char *label,
-    const std::vector<std::pair<AlphaCode, size_t>> &codebook,
+    const std::vector<CodebookEntry> &codebook,
     const std::map<AlphaCode, std::vector<bool>> &codeIndex
   );
   void writeCodebookMacro(
     SafeWriter* w,
     const char *label,
-    const std::vector<std::pair<AlphaCode, size_t>> &codebook
+    const char *track,
+    const std::vector<CodebookEntry> &codebook
   );
   void run();
 

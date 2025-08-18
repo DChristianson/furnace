@@ -118,25 +118,36 @@ void HuffmanTree::buildIndex(std::map<AlphaCode, std::vector<bool>> &index) {
   }
 }
 
-  void HuffmanTree::writePath(std::vector<bool> &path) {
-    HuffmanTree *current = this;
-    logD("PATH SIZE IN: %d", path.size());
-    while (current->parent != NULL) {
-      bool isLeft = current == current->parent->left;
-      path.emplace_back(isLeft);
-      current = current->parent;
-    }
-    logD("PATH SIZE OUT: %d", path.size());
+void HuffmanTree::writePath(std::vector<bool> &path) {
+  HuffmanTree *current = this;
+  logD("PATH SIZE IN: %d", path.size());
+  while (current->parent != NULL) {
+    bool isLeft = current == current->parent->left;
+    path.emplace_back(isLeft);
+    current = current->parent;
   }
+  logD("PATH SIZE OUT: %d", path.size());
+}
 
-void HuffmanTree::buildCanonicalCodebook(std::vector<std::pair<AlphaCode, size_t>> &codeLengths) {
+
+bool compareCodebookEntryHeight(CodebookEntry &a, CodebookEntry &b) {
+  if (a.height != b.height) return a.height < b.height;
+  return a.code < b.code;
+}
+
+// build canonical codebook with
+// approach adapted from (BSD-license)
+// https://github.com/Cyan4973/FiniteStateEntropy/blob/dev/lib/huf_compress.c
+//
+void HuffmanTree::buildCanonicalCodebook(size_t maxBits, std::vector<CodebookEntry> &codebook) {
   std::vector<HuffmanTree *> stack;
   stack.emplace_back(this);
+  
   while (stack.size() > 0) {
     HuffmanTree *n = stack.back();
     stack.pop_back();
     if (n->isLeaf()) {
-      codeLengths.push_back(std::pair<AlphaCode, int>(n->code, n->height()));
+      codebook.push_back(CodebookEntry(n->code, n->weight, n->height()));
     } else {
       if (n->left != NULL) {
         stack.push_back(n->left);
@@ -146,38 +157,142 @@ void HuffmanTree::buildCanonicalCodebook(std::vector<std::pair<AlphaCode, size_t
       }
     }
   }
-  std::sort(codeLengths.begin(), codeLengths.end(), compareCodeLength);
+  std::sort(codebook.begin(), codebook.end(), compareCodebookEntryHeight);
+
+  for (auto entry : codebook) {
+    logD("Pre-flatten codebook c%d, w%d, h%d", entry.code, entry.weight, entry.height);
+  }
+  // short circuit if we are below maxBits
+  size_t mostBits = codebook.back().height;
+  if (mostBits <= maxBits) {
+    return;
+  }
+
+  long totalWeightToRecover = 0;
+  long baseWeight = 1 << (mostBits - maxBits);
+
+  // find too-large nodes
+  int n = codebook.size() - 1;
+  while (n >= 0) {
+    CodebookEntry &entry = codebook.at(n);
+    logD("checking entry %d height bits %d to recover %d", entry.code, mostBits - entry.height, totalWeightToRecover);
+    if (entry.height <= maxBits) {
+      break;
+    }
+    totalWeightToRecover += baseWeight - (1 << (mostBits - entry.height));
+    entry.height = maxBits;
+    n--;
+  }
+  // stop when height < maxBits
+  while (codebook.at(n).height == maxBits) {
+    n--;
+  }
+
+  // renormalize total weight
+  totalWeightToRecover >>= mostBits - maxBits;
+
+  // find smallest symbol at each rank
+  logD("computing ranks");
+  const size_t NO_RANK = 0xff;
+  size_t ranks[maxBits+1];
+  memset(ranks, NO_RANK, maxBits+1);
+  size_t currentBits = maxBits;
+  for (int p = n; p >= 0; p--) {
+    logD("ranks for %d start at %d", currentBits, p);
+    CodebookEntry &entry = codebook.at(p);
+    if (entry.height >= currentBits) continue;
+    currentBits = entry.height;
+    size_t rank = maxBits - currentBits;
+    logD("rank %d for %d found at %d", rank, currentBits, p);
+    assert(rank < maxBits + 1);
+    ranks[rank] = p;
+  }
+
+  logD("recovering bits, need %d", totalWeightToRecover);
+  while (totalWeightToRecover > 0) {
+    long bitsToDecrease = log2l(totalWeightToRecover) + 1;
+    logD("recovering %d, %d", totalWeightToRecover, bitsToDecrease);
+    for ( ; bitsToDecrease > 1; bitsToDecrease--) {
+      const long highPos = ranks[bitsToDecrease];
+      const long lowPos = ranks[bitsToDecrease - 1];
+      logD("searching %d: %d, %d", bitsToDecrease, highPos, lowPos);
+      if (highPos == NO_RANK) continue;
+      if (lowPos == NO_RANK) break;
+      const long highWeight = codebook.at(highPos).weight;
+      const long lowWeight = 2 * codebook.at(lowPos).weight;
+      if (highWeight <= lowWeight) break;
+    }
+    while (bitsToDecrease <= maxBits && (ranks[bitsToDecrease] == NO_RANK)) {
+      bitsToDecrease++;
+    }
+    totalWeightToRecover -= 1 << (bitsToDecrease - 1);
+    if (ranks[bitsToDecrease - 1] == NO_RANK) {
+        ranks[bitsToDecrease - 1] = ranks[bitsToDecrease]; 
+    }
+    codebook.at(ranks[bitsToDecrease]).height++;
+    if (ranks[bitsToDecrease] == 0) {
+      ranks[bitsToDecrease] = NO_RANK;
+    } else {
+      ranks[bitsToDecrease]--;
+      if (codebook.at(ranks[bitsToDecrease]).height != maxBits - bitsToDecrease) {
+        ranks[bitsToDecrease] = NO_RANK;
+      }
+    }
+  }
+  // handle overshoot
+  while (totalWeightToRecover < 0) { 
+    if (ranks[1] == NO_RANK) {
+      while (codebook.at(n).height == maxBits) {
+        n--;
+      }
+      codebook.at(n+1).height--;
+      ranks[1] = (n+1);
+      totalWeightToRecover++;
+      continue;
+    }
+    codebook.at(ranks[1] + 1).height--;
+    ranks[1]++;
+    totalWeightToRecover ++;
+  }
+
+  // re-sort
+  std::sort(codebook.begin(), codebook.end(), compareCodebookEntryHeight);
+  for (auto entry : codebook) {
+    logD("Post-flatten codebook c%d, w%d, h%d", entry.code, entry.weight, entry.height);
+  }
+
 }
 
 HuffmanTree *buildHuffmanTree(
   const std::map<AlphaCode, size_t> &frequencyMap,
-  size_t limit,
+  size_t nodeLimit,
   size_t minWeight,
-  AlphaCode literal,
-  std::vector<std::pair<AlphaCode, size_t>> &codebook
+  size_t maxBits,
+  AlphaCode literalCode,
+  std::vector<CodebookEntry> &codebook
 ) {
 
   std::priority_queue<HuffmanTree *, std::vector<HuffmanTree *>, CompareHuffmanTreeWeights> heap;
 
-  size_t literal_weight = 0;
+  size_t literalWeight = 0;
   for (auto &x:frequencyMap) {
     if (x.second < minWeight) {
-      literal_weight += 1;
+      literalWeight += 1;
       continue;
     }
     HuffmanTree *node = new HuffmanTree(x.first, x.second);
     heap.emplace(node);
   }
 
-  while (heap.size() > limit) {
+  while (heap.size() > nodeLimit) {
     auto node = heap.top();
     heap.pop();
-    literal_weight += node->weight;
+    literalWeight += node->weight;
     delete node;
   }
 
-  if (literal_weight > 0) {
-    HuffmanTree *node = new HuffmanTree(literal, literal_weight);
+  if (literalWeight > 0) {
+    HuffmanTree *node = new HuffmanTree(literalCode, literalWeight);
     heap.emplace(node);
   }
 
@@ -191,11 +306,11 @@ HuffmanTree *buildHuffmanTree(
   }
   
   HuffmanTree* initialTree = heap.top();
-  initialTree->buildCanonicalCodebook(codebook);
+  initialTree->buildCanonicalCodebook(maxBits, codebook);
   if (frequencyMap.size() == 1) {
     logD("FREQ MAP SIZE %d CODE TREE SIZE: %d IS LEAF ROOT: %d", frequencyMap.size(), codebook.size(), initialTree->isLeaf() ? 1 : 0);
     auto it = codebook[0];
-    logD("LENGTH CODE 0: %d / FREQ %d", it.second, frequencyMap.at(it.first));
+    logD("LENGTH CODE 0: %d / FREQ %d", it.height, frequencyMap.at(it.code));
   }
   delete initialTree;
   HuffmanTree* canonicalTree = buildHuffmanTreeFromCodebook(codebook);
@@ -206,24 +321,25 @@ HuffmanTree *buildHuffmanTree(
   return canonicalTree;
 }
 
-HuffmanTree *buildHuffmanTreeFromCodebook(const std::vector<std::pair<AlphaCode, size_t>> &codeLengths) {
-  size_t codeLength = 0;
-  size_t currentCode = SIZE_MAX;
+HuffmanTree *buildHuffmanTreeFromCodebook(const std::vector<CodebookEntry> &codebook) {
   HuffmanTree* canonicalTree = new HuffmanTree();
-  if (codeLengths.size() == 1) {
-    auto &p = codeLengths.at(0);
-    assert(p.second == 0);
-    canonicalTree->setCode(p.first, 0);
+  if (codebook.size() == 1) {
+    auto &p = codebook.at(0);
+    assert(p.height == 0);
+    canonicalTree->setCode(p.code, 0);
     return canonicalTree;
   }
-  for (auto &p : codeLengths) {
+
+  size_t currentHeight = 0;
+  size_t currentCode = SIZE_MAX;
+  for (auto &p : codebook) {
     currentCode += 1;
-    if (p.second > codeLength) {
-      currentCode = currentCode << (p.second - codeLength);
-      codeLength = p.second;
+    if (p.height > currentHeight) {
+      currentCode = currentCode << (p.height - currentHeight);
+      currentHeight = p.height;
     }
     HuffmanTree* current = canonicalTree;
-    size_t mask = 1 << (codeLength - 1);
+    size_t mask = 1 << (currentHeight - 1);
     while (mask) {
       if (mask & currentCode) {
         if (current->left == NULL) {
@@ -240,7 +356,7 @@ HuffmanTree *buildHuffmanTreeFromCodebook(const std::vector<std::pair<AlphaCode,
       }
       mask = mask >> 1;
     }
-    current->setCode(p.first, 0);
+    current->setCode(p.code, 0);
   }
   return canonicalTree;
 }

@@ -286,7 +286,7 @@ public:
    */
   void writeChannelStateSequence(
     int systemIndex,
-    int suppressVolume,
+    int suppressVolumeRegister,
     const std::map<unsigned int, unsigned int> &addressMap,
     ChannelStateSequence &dumpSequence 
   );
@@ -297,7 +297,7 @@ public:
   void writeChannelStateSequenceByRow(
     int channel,
     int systemIndex,
-    int suppressVolume,
+    int suppressVolumeRegister,
     const std::map<unsigned int, unsigned int> &addressMap,
     std::map<String, ChannelStateSequence> &dumpSequenceMap 
   );
