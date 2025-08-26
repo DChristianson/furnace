@@ -21,6 +21,17 @@
 #include <queue>
 #include "../../ta-log.h"
 
+// BUGBUG: this is not the best good way
+unsigned long msb(unsigned long s) {
+  unsigned long i = 0;
+  while (s > 0) {
+    s >>= 1;
+    i++;
+  }
+  return i;
+}
+
+
 unsigned char Bitstream::readByte() {
   size_t s = pos % 64;
   size_t address = pos >> 6;
@@ -120,15 +131,12 @@ void HuffmanTree::buildIndex(std::map<AlphaCode, std::vector<bool>> &index) {
 
 void HuffmanTree::writePath(std::vector<bool> &path) {
   HuffmanTree *current = this;
-  logD("PATH SIZE IN: %d", path.size());
   while (current->parent != NULL) {
     bool isLeft = current == current->parent->left;
     path.emplace_back(isLeft);
     current = current->parent;
   }
-  logD("PATH SIZE OUT: %d", path.size());
 }
-
 
 bool compareCodebookEntryHeight(CodebookEntry &a, CodebookEntry &b) {
   if (a.height != b.height) return a.height < b.height;
@@ -159,9 +167,6 @@ void HuffmanTree::buildCanonicalCodebook(size_t maxBits, std::vector<CodebookEnt
   }
   std::sort(codebook.begin(), codebook.end(), compareCodebookEntryHeight);
 
-  for (auto entry : codebook) {
-    logD("Pre-flatten codebook c%d, w%d, h%d", entry.code, entry.weight, entry.height);
-  }
   // short circuit if we are below maxBits
   size_t mostBits = codebook.back().height;
   if (mostBits <= maxBits) {
@@ -210,7 +215,7 @@ void HuffmanTree::buildCanonicalCodebook(size_t maxBits, std::vector<CodebookEnt
 
   logD("recovering bits, need %d", totalWeightToRecover);
   while (totalWeightToRecover > 0) {
-    long bitsToDecrease = log2l(totalWeightToRecover) + 1;
+    unsigned long bitsToDecrease = msb((unsigned long) totalWeightToRecover);
     logD("recovering %d, %d", totalWeightToRecover, bitsToDecrease);
     for ( ; bitsToDecrease > 1; bitsToDecrease--) {
       const long highPos = ranks[bitsToDecrease];
@@ -257,9 +262,6 @@ void HuffmanTree::buildCanonicalCodebook(size_t maxBits, std::vector<CodebookEnt
 
   // re-sort
   std::sort(codebook.begin(), codebook.end(), compareCodebookEntryHeight);
-  for (auto entry : codebook) {
-    logD("Post-flatten codebook c%d, w%d, h%d", entry.code, entry.weight, entry.height);
-  }
 
 }
 
@@ -271,7 +273,9 @@ HuffmanTree *buildHuffmanTree(
   AlphaCode literalCode,
   std::vector<CodebookEntry> &codebook
 ) {
-
+  if (frequencyMap.empty()) {
+    return NULL;
+  }
   std::priority_queue<HuffmanTree *, std::vector<HuffmanTree *>, CompareHuffmanTreeWeights> heap;
 
   size_t literalWeight = 0;

@@ -139,6 +139,23 @@ struct ChannelState {
 
 };
 
+struct VelocityInterval {
+
+  int duration;
+  int velocity;
+  int step;
+
+  VelocityInterval(const VelocityInterval &other)
+    : duration(other.duration), velocity(other.velocity), step(other.step) {}
+
+  VelocityInterval(const int duration, const int velocity, const int step)
+    : duration(duration), velocity(velocity), step(step) {}
+    
+  int numSteps() {
+    return duration / step;
+  }
+
+};
 
 /**
  * ChannelState + time interval
@@ -187,7 +204,6 @@ struct ChannelStateSequence {
     }
     intervals.emplace_back(ChannelStateInterval(state, 0, row));
   }
-
 
   int addDuration(const int ticks, const int remainder, const int freq, const RowIndex &row) {
     if (intervals.size() == 0) {

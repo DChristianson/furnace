@@ -25,6 +25,8 @@
 #include "suffixTree.h"
 #include "huffman.h"
 
+const size_t NUM_ZIP_CHANNELS = 2;
+
 class DivExportTIAZip : public DivROMExport {
 
   DivEngine* e;
@@ -45,12 +47,14 @@ class DivExportTIAZip : public DivROMExport {
   // LZ-type encoding 
   // compressed sequences
   //
-  void writeTrackDataTIAZip(int compressionLevel);
+  void writeTrackDataTIAZip(int compressionLevel, int minSpanLength, int maxSustain, int jumpMapBits);
   
   void encodeBitstreamDynamic(
-    const std::vector<AlphaCode> (*codeSequences)[2],
-    const std::vector<AlphaCode> (*compressedCodeSequences)[2],
-    const std::vector<AlphaCode> (*spanSequences)[2],
+    const std::vector<AlphaCode> (*codeSequences)[NUM_ZIP_CHANNELS],
+    const std::vector<AlphaCode> (*compressedCodeSequences)[NUM_ZIP_CHANNELS],
+    const std::vector<AlphaCode> (*spanSequences)[NUM_ZIP_CHANNELS],
+    int jumpMapBits,
+    int compressionLevel,
     size_t dataOffset,
     size_t blockSize
   );
@@ -60,8 +64,11 @@ class DivExportTIAZip : public DivROMExport {
     int channel,
     const std::vector<AlphaCode> &alphabet,
     const std::map<AlphaCode, AlphaChar> &index,
+    const std::map<AlphaChar, size_t> &alphaCharWeights,
+    size_t branchWeight,
     const std::vector<AlphaCode>&codeSequence,
     int compressionLevel,
+    int minSpanLength,
     std::vector<AlphaCode> &compressedCodeSequence,
     std::vector<AlphaCode> &spanSequence
   );
@@ -78,6 +85,8 @@ class DivExportTIAZip : public DivROMExport {
     const ChannelState& next,
     const char duration,
     const ChannelState& last,
+    const int maxSustain,
+    const int velocity,
     std::vector<AlphaCode> &out
   );
 

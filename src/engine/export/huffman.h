@@ -22,6 +22,8 @@
 
 #include "suffixTree.h"
 
+unsigned long msb(unsigned long s);
+
 /**
  * Helper class for writing bitstreams
  */

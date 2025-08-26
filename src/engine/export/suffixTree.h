@@ -200,7 +200,7 @@ void compressSequence(
   SuffixTree *root,
   int subsong,
   int channel,
-  const std::vector<AlphaChar> &alphaSequence,
+  size_t branchWeight,
   std::vector<Span> &copySequence
 );
 

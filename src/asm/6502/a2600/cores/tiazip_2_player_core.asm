@@ -51,6 +51,7 @@ audio_data_0_ff_buf   ds 1
 audio_data_1_last_buf ds 1
 audio_data_1_ff_buf   ds 1
 
+audio_channel_cx      ds 2
 audio_channel_vx      ds 2
 
     ENDM
@@ -132,36 +133,42 @@ _audio_update_loopback:
             dec audio_timer,x
             bpl _audio_update_next_channel
 _audio_update_next_command
-            audio_decode_command_MACRO
+            ldy DATA_CODE_TABLE,x
+            ldx audio_data_stream_idx
+            jsr audio_stream_read_symbol
             sta command_ptr_lo
             jmp (command_ptr)
 CODE_WRITE_REGISTERS_111:
             audio_decode_control_MACRO
             sta audio_cx,x
+            sta audio_channel_cx,x
 CODE_WRITE_REGISTERS_011:
             jsr audio_decode_frequency
 CODE_WRITE_REGISTERS_001:
             audio_decode_volume_MACRO
+            bmi CODE_VELOCITY
             sta audio_channel_vx,x
-            byte $2c
-CODE_VOL_INC:
-            inc audio_channel_vx,x
-            byte $2c
-CODE_VOL_DEC:
-            dec audio_channel_vx,x
+            lda #0
+CODE_VELOCITY
+            sta audio_channel_dv,x
+            clc
+            adc audio_channel_vx,x
+            and #0x0f
+            sta audio_channel_vx,x
             jmp _audio_update_next_channel
 CODE_WRITE_REGISTERS_010:
             jsr audio_decode_frequency
-            jmp _audio_update_next_channel ; BUGBUG space?
-CODE_PAUSE:
-            lda #0
-            sta audio_channel_vx,x
+            jmp _audio_update_vx ; BUGBUG space?
 CODE_SUSTAIN:
             audio_decode_duration_MACRO
             sta audio_timer,x
-            jmp _audio_update_next_channel
+_audio_update_vx
+            lda audio_channel_dv,x
+            jmp CODE_VELOCITY
 CODE_BRANCH_POINT:
-            audio_decode_span_MACRO
+            ldy SPAN_CODE_TABLE,x
+            ldx audio_span_stream_idx
+            jsr audio_stream_read_symbol
             sta command_ptr_lo
             jmp (command_ptr)
 CODE_STOP = audio_play_track
@@ -300,12 +307,42 @@ _audio_skip_shift
             sta audio_stream_hi,x
             ldx audio_channel_idx
             jmp _audio_update_next_command            
-
 SPAN_IDX
   byte 4,6
 
+DATA_CODE_TABLE
+  byte audio_decode_command_0_CODES
+  byte audio_decode_command_1_CODES
+
+SPAN_CODE_TABLE
+  byte audio_decode_span_0_CODES
+  byte audio_decode_span_1_CODES
+
+; INSTRUMENT_CODE_TABLE
+;   byte 0; audio_decode_control_0_frequency_CODES
+;   byte 0; audio_decode_control_1_frequency_CODES
+;   byte 0; audio_decode_control_2_frequency_CODES
+;   byte 0; audio_decode_control_3_frequency_CODES
+;   byte 0; audio_decode_control_4_frequency_CODES
+;   byte 0; audio_decode_control_5_frequency_CODES
+;   byte 0; audio_decode_control_6_frequency_CODES
+;   byte 0; audio_decode_control_7_frequency_CODES
+;   byte 0; audio_decode_control_8_frequency_CODES
+;   byte 0; audio_decode_control_9_frequency_CODES
+;   byte 0; audio_decode_control_10_frequency_CODES
+;   byte 0; audio_decode_control_11_frequency_CODES
+;   byte audio_decode_control_12_frequency_CODES
+;   byte 0; audio_decode_control_13_frequency_CODES
+;   byte 0; audio_decode_control_14_frequency_CODES
+;   byte 0; audio_decode_control_15_frequency_CODES
+
 audio_decode_frequency
-            audio_decode_frequency_MACRO
+            audio_decode_0_frequency_MACRO
+            ; instrument table
+            ; ldy audio_channel_cx,x
+            ; lda INSTRUMENT_CODE_TABLE,y
+            ; tay
+            ; jsr audio_stream_read_symbol
             sta audio_fx,x
 ; lead voice optimization
 ;             cmp #$20

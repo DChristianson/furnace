@@ -333,64 +333,6 @@ void compressSequence(
       }
     }
   }
-  
-  std::vector<Path *> paths;
-  Path *start = new Path(subsong, channel, 0, 0);
-  paths.emplace_back(start);
-  std::queue<Path *> solutionQueue;
-  solutionQueue.push(start);
-  std::vector<Path *> solutions;
-  while (!solutionQueue.empty()) {
-    auto path = solutionQueue.front();
-    solutionQueue.pop();
-    logD("searching path %d: %d-%d (%d)", (size_t)path, path->span.start, path->span.length, path->weight);
-    size_t nextStart = path->span.start + path->span.length;
-    if (nextStart >= alphaSequence.size()) {
-      solutions.emplace_back(path);
-      continue;
-    }
-    auto &starts = spanStarts[nextStart];
-    Path *next;
-    if (starts.size() == 0) {
-      if (path->state == NULL) {
-        path->span.length++;
-        logD("extending path %d: %d-%d ", (size_t)path, path->span.start, path->span.length);
-        next = path;
-      } else {
-        next = new Path(subsong, channel, nextStart, 1);
-        logD("new path %d: %d-%d", (size_t)next, nextStart, 1);
-        paths.emplace_back(next);
-        next->prev = path;
-        next->weight = path->weight;
-      }
-      next->weight += 1;
-      solutionQueue.push(next);
-      continue;
-    }
-    for (auto dups : starts) {
-      Path *next = new Path(subsong, channel, nextStart, dups->length);
-      paths.emplace_back(next);
-      logD("sub path %d: %d-%d", (size_t)next, next->span.start, next->span.length);
-      next->prev = path;
-      next->state = dups;
-      next->weight = path->weight;
-      if (dups->spans[0].start == nextStart) {
-        next->weight += dups->length;
-      } else {
-        next->weight += 1;
-      }
-      solutionQueue.push(next);
-    }
-  }
-  
-  for (auto path : solutions) {
-    logD("path: %d", path->weight);
-  }
-
-  for (auto path : paths) {
-    delete path;
-  }
-  
 
   size_t uniqueSpans = 0;
   size_t minRepeats = 0;
