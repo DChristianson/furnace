@@ -52,6 +52,7 @@ audio_data_1_last_buf ds 1
 audio_data_1_ff_buf   ds 1
 
 audio_channel_cx      ds 2
+audio_channel_dv      ds 2
 audio_channel_vx      ds 2
 
     ENDM
@@ -133,9 +134,7 @@ _audio_update_loopback:
             dec audio_timer,x
             bpl _audio_update_next_channel
 _audio_update_next_command
-            ldy DATA_CODE_TABLE,x
-            ldx audio_data_stream_idx
-            jsr audio_stream_read_symbol
+            audio_decode_command_MACRO
             sta command_ptr_lo
             jmp (command_ptr)
 CODE_WRITE_REGISTERS_111:
@@ -166,9 +165,7 @@ _audio_update_vx
             lda audio_channel_dv,x
             jmp CODE_VELOCITY
 CODE_BRANCH_POINT:
-            ldy SPAN_CODE_TABLE,x
-            ldx audio_span_stream_idx
-            jsr audio_stream_read_symbol
+            audio_decode_span_MACRO
             sta command_ptr_lo
             jmp (command_ptr)
 CODE_STOP = audio_play_track
@@ -310,39 +307,8 @@ _audio_skip_shift
 SPAN_IDX
   byte 4,6
 
-DATA_CODE_TABLE
-  byte audio_decode_command_0_CODES
-  byte audio_decode_command_1_CODES
-
-SPAN_CODE_TABLE
-  byte audio_decode_span_0_CODES
-  byte audio_decode_span_1_CODES
-
-; INSTRUMENT_CODE_TABLE
-;   byte 0; audio_decode_control_0_frequency_CODES
-;   byte 0; audio_decode_control_1_frequency_CODES
-;   byte 0; audio_decode_control_2_frequency_CODES
-;   byte 0; audio_decode_control_3_frequency_CODES
-;   byte 0; audio_decode_control_4_frequency_CODES
-;   byte 0; audio_decode_control_5_frequency_CODES
-;   byte 0; audio_decode_control_6_frequency_CODES
-;   byte 0; audio_decode_control_7_frequency_CODES
-;   byte 0; audio_decode_control_8_frequency_CODES
-;   byte 0; audio_decode_control_9_frequency_CODES
-;   byte 0; audio_decode_control_10_frequency_CODES
-;   byte 0; audio_decode_control_11_frequency_CODES
-;   byte audio_decode_control_12_frequency_CODES
-;   byte 0; audio_decode_control_13_frequency_CODES
-;   byte 0; audio_decode_control_14_frequency_CODES
-;   byte 0; audio_decode_control_15_frequency_CODES
-
 audio_decode_frequency
-            audio_decode_0_frequency_MACRO
-            ; instrument table
-            ; ldy audio_channel_cx,x
-            ; lda INSTRUMENT_CODE_TABLE,y
-            ; tay
-            ; jsr audio_stream_read_symbol
+            audio_decode_frequency_MACRO
             sta audio_fx,x
 ; lead voice optimization
 ;             cmp #$20

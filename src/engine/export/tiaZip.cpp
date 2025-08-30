@@ -1279,15 +1279,15 @@ void DivExportTIAZip::encodeBitstreamDynamic(
     {1, 0},
     {2, 0},
     {3, 0},
-    {4, 1},
+    {4, compressionLevel > 1 ? 1 : 0},
     {5, 0},
     {6, 0},
     {7, 0},
-    {8, 1},
+    {8, compressionLevel > 1 ? 1 : 0},
     {9, 0},
     {10, 0},
     {11, 0},
-    {12, 1},
+    {12, compressionLevel > 1 ? 1 : 0},
     {13, 0},
     {14, 0},
     {15, 0},
@@ -1948,7 +1948,7 @@ void DivExportTIAZip::encodeBitstreamDynamic(
   }
   totalCompressedBytes += writeCodebookLadder(trackData, "audio_decode_volume", volumeCodebook, volumeCodeIndex);
   totalCompressedBytes += writeCodebookLadder(trackData, "audio_decode_duration", durationCodebook, durationCodeIndex);
-  totalCompressedBytes += writeCodebookLadder(trackData, "audio_decode_duration", velocityCodebook, velocityCodeIndex);
+  totalCompressedBytes += writeCodebookLadder(trackData, "audio_decode_velocity", velocityCodebook, velocityCodeIndex);
 
   // codes
   trackData->writeText(fmt::sprintf("\nCODEBOOK_CODES"));
@@ -1988,7 +1988,7 @@ void DivExportTIAZip::encodeBitstreamDynamic(
   if (spanCodebook.size() == 1) {
     // BUGBUG: massive kludge
     trackData->writeText("\n    ; audio_decode_span\n");
-    trackData->writeText("    MAC audio_decode_span_%d_MACRO\n");
+    trackData->writeText("    MAC audio_decode_span_MACRO\n");
     trackData->writeText("    lda #<CODE_STOP\n");
     trackData->writeText("    ENDM\n\n");
   } else {
@@ -1999,15 +1999,30 @@ void DivExportTIAZip::encodeBitstreamDynamic(
       spanCodebook);
   }
   writeCodebookMacro(trackData, "audio_decode_control", "audio_data_stream_idx", controlCodebook);
-  // writeCodebookMacro(trackData, "audio_decode_frequency", "audio_data_stream_idx", frequencyCodebook);
-  for (auto &x : mergedFrequencyCodebooks) {
+  if (mergedFrequencyCodebooks.size() == 1) {
+    auto it = mergedFrequencyCodebooks.begin();
+    AlphaCode instrumentCode = (*it).first;
+    trackData->writeText(fmt::sprintf("\naudio_decode_frequency_CODES = audio_decode_control_%d_frequency_CODES", instrumentCode));
     writeCodebookMacro(
       trackData,
-      fmt::sprintf("audio_decode_control_%d_frequency", x.first).c_str(),
+      "audio_decode_frequency",
       "audio_data_stream_idx", 
-      x.second
+      (*it).second
     );
-  };
+  } else {
+    trackData->writeText("\nCONTROL_FREQUENCY_TABLE");
+    for (AlphaCode i = 0; i < 16; i++) {
+      AlphaCode instrumentCode = controlCodeMergeMap[i];
+      trackData->writeText(fmt::sprintf("\n    byte audio_decode_control_%d_frequency_CODES", instrumentCode));
+    }
+    trackData->writeText("\n    MAC audio_decode_frequency_MACRO\n");
+    trackData->writeText("    ldy audio_channel_cx,x\n");
+    trackData->writeText("    lda CONTROL_FREQUENCY_TABLE,y\n");
+    trackData->writeText("    tay\n");
+    trackData->writeText("    ldx audio_data_stream_idx\n");
+    trackData->writeText("    jsr audio_stream_read_symbol\n");
+    trackData->writeText("    ENDM\n\n");
+  }
   writeCodebookMacro(trackData, "audio_decode_volume", "audio_data_stream_idx", volumeCodebook);
   writeCodebookMacro(trackData, "audio_decode_duration", "audio_data_stream_idx", durationCodebook);
   writeCodebookMacro(trackData, "audio_decode_velocity", "audio_data_stream_idx", velocityCodebook);
@@ -2085,10 +2100,11 @@ size_t DivExportTIAZip::writeCodebookLadder(
     }
     w->writeText(fmt::sprintf("\n    byte %%%s", bitcode));
     bytesWritten += 1;
-    if (entry.height == 7) {
-      // only take the first entry at 7 bits
-      break;
-    }
+    // BUGBUG... think about
+    // if (entry.height == 7) {
+    //   // only take the first entry at 7 bits
+    //   break;
+    // }
   }
   return bytesWritten;
 }
