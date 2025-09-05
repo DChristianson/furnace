@@ -1278,12 +1278,12 @@ void DivExportTIAZip::encodeBitstreamDynamic(
     {0, 0},
     {1, 0},
     {2, 0},
-    {3, 0},
+    {3, compressionLevel > 1 ? 1 : 0},
     {4, compressionLevel > 1 ? 1 : 0},
     {5, 0},
-    {6, 0},
+    {6, compressionLevel > 1 ? 1 : 0},
     {7, 0},
-    {8, compressionLevel > 1 ? 1 : 0},
+    {8, 0},
     {9, 0},
     {10, 0},
     {11, 0},
@@ -1295,10 +1295,14 @@ void DivExportTIAZip::encodeBitstreamDynamic(
   std::map<AlphaCode, std::map<AlphaCode, size_t>> mergedFrequencyMap;
   for (auto &x : initialFrequencyMap) {
     AlphaCode mergeFrequencyCode = controlCodeMergeMap[x.first];
-    for (auto &f: initialFrequencyMap[x.first]) {
+    for (auto &f: x.second) {
       mergedFrequencyMap[mergeFrequencyCode][f.first] += f.second;
     }
-    logD("merged frequency tree %d audcx %d", mergeFrequencyCode, x.first);
+    String row = "";
+    for (size_t i = 0; i < 31; i++) {
+      row += fmt::sprintf(" %02d", x.second[i]);
+    }
+    logD("F%02d %s", x.first, row);
   }
   // std::priority_queue<std::pair<AlphaCode, size_t>, std::vector<std::pair<AlphaCode, size_t>>, CompareFrequencies> frequencyHeap;
   // // find out most important cx value
@@ -1328,6 +1332,7 @@ void DivExportTIAZip::encodeBitstreamDynamic(
   //   }
   //   logD("merged frequency tree %d audcx %d weight %d", mergedFrequencyCode, x.first, totalWeight);
   // }
+
 
   std::map<AlphaCode, std::vector<CodebookEntry>> mergedFrequencyCodebooks;
   std::map<AlphaCode, HuffmanTree *> mergedFrequencyTrees;
@@ -1505,7 +1510,10 @@ void DivExportTIAZip::encodeBitstreamDynamic(
         size_t address = positionMap[x.second];
         dataStream->writeBits(address, addressBits);
         unsigned long bits = msb(address);
-        logD("DATA %d %d - REMAP JUMP ADDRESS@%08x: %08x -> %08x (%08x is %d bits)", subsong, channel, BITSTREAM_ADDR(x.first), x.second, BITSTREAM_ADDR(address), address, bits);
+        bool jumpForward = address > x.first;
+        size_t distanceBytes = (jumpForward ? address - x.first : x.first - address) >> 3;
+        unsigned long distanceBits = msb(distanceBytes) + 4;
+        logD("DATA %d %d - REMAP JUMP ADDRESS@%08x: %08x -> %08x (%08x is %d bits) (distance %d/%d is %d bits)", subsong, channel, BITSTREAM_ADDR(x.first), x.second, BITSTREAM_ADDR(address), address, bits, distanceBytes, jumpForward, distanceBits);
       }
 
       // produce track stream
@@ -1575,8 +1583,11 @@ void DivExportTIAZip::encodeBitstreamDynamic(
         trackStream->seek(x.first);
         size_t address = positionMap[x.second];
         trackStream->writeBits(address, addressBits);
-        long bits = log2l(address);
-        logD("TRACK %d %d - REMAP JUMP ADDRESS@%08x: %08x -> %08x (%d bits)", subsong, channel, BITSTREAM_ADDR(x.first), x.second, BITSTREAM_ADDR(address), bits);
+        long bits = msb(address);
+        bool jumpForward = address > x.first;
+        size_t distanceBytes = (jumpForward ? address - x.first : x.first - address) >> 3;
+        unsigned long distanceBits = msb(distanceBytes) + 4;
+        logD("TRACK %d %d - REMAP JUMP ADDRESS@%08x: %08x -> %08x (%d bits) (distance %d/%d is %d bits)", subsong, channel, BITSTREAM_ADDR(x.first), x.second, BITSTREAM_ADDR(address), bits, distanceBytes, jumpForward, distanceBits);
       }
 
       for (auto& x : jumpMap) {
@@ -1724,8 +1735,10 @@ void DivExportTIAZip::encodeBitstreamDynamic(
               nextAddress = jumpAddresses[index];
             }
             nextAddress -= streamDataOffset;
-            long distance = ((long) nextAddress) - streamPosition;
-            jumpDistanceMap[distance > 0 ? distance : (((uint64_t)1) << 56) | -distance]++;
+            if (isAddress) {
+              long distance = ((long) nextAddress) - streamPosition;
+              jumpDistanceMap[distance > 0 ? distance : (((uint64_t)1) << 56) | -distance]++;
+            }
             returnAddress = dataStream->position();
             if (maxOffset < returnAddress) {
               maxOffset = returnAddress;
@@ -1768,6 +1781,7 @@ void DivExportTIAZip::encodeBitstreamDynamic(
             // jump and seek
             size_t trackPosition = trackStream->position();
             AlphaCode sx = spanTree->decode(trackStream);
+            bool isAddress = false;
             size_t nextAddress;
 
             if (sx == CODE_STOP) {
@@ -1788,12 +1802,12 @@ void DivExportTIAZip::encodeBitstreamDynamic(
               
             } else if (sx == CODE_SKIP) {
               // skip next datastream address
-              bool isAddress = dataStream->readBit();
+              isAddress = dataStream->readBit();
               dataStream->readBits(isAddress ? addressBits : addressIndexBits);
               continue;
 
             } else if (sx == CODE_TAKE_DATA_JUMP ) {
-              bool isAddress = dataStream->readBit();
+              isAddress = dataStream->readBit();
               if (isAddress) {
                 nextAddress = dataStream->readBits(addressBits);
               } else {
@@ -1802,7 +1816,7 @@ void DivExportTIAZip::encodeBitstreamDynamic(
               }
 
             } else if (sx == CODE_TAKE_TRACK_JUMP) {
-              bool isAddress = trackStream->readBit();
+              isAddress = trackStream->readBit();
               if (isAddress) {
                 nextAddress = trackStream->readBits(addressBits);
               } else {
@@ -1819,8 +1833,10 @@ void DivExportTIAZip::encodeBitstreamDynamic(
             }
 
             nextAddress -= streamDataOffset;
-            long distance = ((long) nextAddress) - streamPosition;
-            jumpDistanceMap[distance > 0 ? distance : (((uint64_t)1) << 56) | -distance]++;
+            if (isAddress) {
+              long distance = ((long) nextAddress) - streamPosition;
+              jumpDistanceMap[distance > 0 ? distance : (((uint64_t)1) << 56) | -distance]++;
+            }
             returnAddress = dataStream->position();
             if (maxOffset < returnAddress) {
               maxOffset = returnAddress;
@@ -1856,7 +1872,30 @@ void DivExportTIAZip::encodeBitstreamDynamic(
   }
 
   logD("jump distance map");
-  SHOW_FREQUENCIES(jumpDistanceMap);
+  {
+    std::vector<std::pair<AlphaCode, size_t>> distanceFreq(
+      jumpDistanceMap.begin(),
+      jumpDistanceMap.end()
+    );
+    std::sort(
+      distanceFreq.begin(),
+      distanceFreq.end(),
+      compareCodeFrequency
+    );
+    size_t totalSave = 0;
+    size_t totalLost = 0;
+    size_t totalBits = 0;
+    for (auto &x : distanceFreq) {
+      bool forward = x.first >> 56;
+      size_t distance = x.first & 0xffff;
+      unsigned long bits = msb(distance);
+      if (bits <= 11) {
+        totalSave += 4 * x.second;
+      } 
+      totalLost += x.second;
+      logD("FREQ %d%s %d bits, %d freq, save %d - %d", distance, forward ? "F" : "B", bits, x.second, totalSave, totalLost);
+    }
+  }
 
   size_t totalCompressedBytes = 0;
 
@@ -1923,32 +1962,89 @@ void DivExportTIAZip::encodeBitstreamDynamic(
   }
 
   // write control and decoder tables
-  trackData->writeText(fmt::sprintf("\nCODEBOOK_LADDER"));
-  totalCompressedBytes += writeCodebookLadder(
+  trackData->writeText(fmt::sprintf("\nCODEBOOK_FIRST_VALUES"));
+  totalCompressedBytes += writeCodebookFirstValues(
     trackData, 
     "audio_decode_command",
     abstractCodebook,
     abstractCodeIndex
   );
-  totalCompressedBytes += writeCodebookLadder(
+  totalCompressedBytes += writeCodebookFirstValues(
     trackData,
     "audio_decode_span",
     spanCodebook,
     spanCodeIndex
   );
-  totalCompressedBytes += writeCodebookLadder(trackData, "audio_decode_control", controlCodebook, controlCodeIndex);
-  // totalCompressedBytes += writeCodebookLadder(trackData, "audio_decode_frequency", frequencyCodebook, frequencyCodeIndex);
+  totalCompressedBytes += writeCodebookFirstValues(trackData, "audio_decode_control", controlCodebook, controlCodeIndex);
+  // totalCompressedBytes += writeCodebookFirstValues(trackData, "audio_decode_frequency", frequencyCodebook, frequencyCodeIndex);
   for (auto &x : mergedFrequencyCodebooks) {
-    totalCompressedBytes += writeCodebookLadder(
+    totalCompressedBytes += writeCodebookFirstValues(
       trackData,
       fmt::sprintf("audio_decode_control_%d_frequency", x.first).c_str(),
       x.second,
       mergedFrequencyCodeIndexes[x.first]
     );
   }
-  totalCompressedBytes += writeCodebookLadder(trackData, "audio_decode_volume", volumeCodebook, volumeCodeIndex);
-  totalCompressedBytes += writeCodebookLadder(trackData, "audio_decode_duration", durationCodebook, durationCodeIndex);
-  totalCompressedBytes += writeCodebookLadder(trackData, "audio_decode_velocity", velocityCodebook, velocityCodeIndex);
+  totalCompressedBytes += writeCodebookFirstValues(trackData, "audio_decode_volume", volumeCodebook, volumeCodeIndex);
+  totalCompressedBytes += writeCodebookFirstValues(trackData, "audio_decode_duration", durationCodebook, durationCodeIndex);
+  totalCompressedBytes += writeCodebookFirstValues(trackData, "audio_decode_velocity", velocityCodebook, velocityCodeIndex);
+
+  // write control and decoder tables
+  trackData->writeText(fmt::sprintf("\nCODEBOOK_LAST_VALUES"));
+  totalCompressedBytes += writeCodebookLastValues(
+    trackData, 
+    "audio_decode_command",
+    abstractCodebook,
+    abstractCodeIndex
+  );
+  totalCompressedBytes += writeCodebookLastValues(
+    trackData,
+    "audio_decode_span",
+    spanCodebook,
+    spanCodeIndex
+  );
+  totalCompressedBytes += writeCodebookLastValues(trackData, "audio_decode_control", controlCodebook, controlCodeIndex);
+  // totalCompressedBytes += writeCodebookLastValues(trackData, "audio_decode_frequency", frequencyCodebook, frequencyCodeIndex);
+  for (auto &x : mergedFrequencyCodebooks) {
+    totalCompressedBytes += writeCodebookLastValues(
+      trackData,
+      fmt::sprintf("audio_decode_control_%d_frequency", x.first).c_str(),
+      x.second,
+      mergedFrequencyCodeIndexes[x.first]
+    );
+  }
+  totalCompressedBytes += writeCodebookLastValues(trackData, "audio_decode_volume", volumeCodebook, volumeCodeIndex);
+  totalCompressedBytes += writeCodebookLastValues(trackData, "audio_decode_duration", durationCodebook, durationCodeIndex);
+  totalCompressedBytes += writeCodebookLastValues(trackData, "audio_decode_velocity", velocityCodebook, velocityCodeIndex);
+
+
+  // write length tables
+  trackData->writeText(fmt::sprintf("\nCODEBOOK_LENGTHS"));
+  size_t codebookTotal = 0;
+  totalCompressedBytes += writeCodebookLengths(
+    trackData, 
+    "audio_decode_command",
+    abstractCodebook,
+    codebookTotal
+  );
+  totalCompressedBytes += writeCodebookLengths(
+    trackData,
+    "audio_decode_span",
+    spanCodebook,
+    codebookTotal
+  );
+  totalCompressedBytes += writeCodebookLengths(trackData, "audio_decode_control", controlCodebook, codebookTotal);
+  for (auto &x : mergedFrequencyCodebooks) {
+    totalCompressedBytes += writeCodebookLengths(
+      trackData,
+      fmt::sprintf("audio_decode_control_%d_frequency", x.first).c_str(),
+      x.second,
+      codebookTotal
+    );
+  }
+  totalCompressedBytes += writeCodebookLengths(trackData, "audio_decode_volume", volumeCodebook, codebookTotal);
+  totalCompressedBytes += writeCodebookLengths(trackData, "audio_decode_duration", durationCodebook, codebookTotal);
+  totalCompressedBytes += writeCodebookLengths(trackData, "audio_decode_velocity", velocityCodebook, codebookTotal);
 
   // codes
   trackData->writeText(fmt::sprintf("\nCODEBOOK_CODES"));
@@ -2002,7 +2098,7 @@ void DivExportTIAZip::encodeBitstreamDynamic(
   if (mergedFrequencyCodebooks.size() == 1) {
     auto it = mergedFrequencyCodebooks.begin();
     AlphaCode instrumentCode = (*it).first;
-    trackData->writeText(fmt::sprintf("\naudio_decode_frequency_CODES = audio_decode_control_%d_frequency_CODES", instrumentCode));
+    trackData->writeText(fmt::sprintf("\naudio_decode_frequency_FIRST_VALUES = audio_decode_control_%d_frequency_FIRST_VALUES", instrumentCode));
     writeCodebookMacro(
       trackData,
       "audio_decode_frequency",
@@ -2013,7 +2109,7 @@ void DivExportTIAZip::encodeBitstreamDynamic(
     trackData->writeText("\nCONTROL_FREQUENCY_TABLE");
     for (AlphaCode i = 0; i < 16; i++) {
       AlphaCode instrumentCode = controlCodeMergeMap[i];
-      trackData->writeText(fmt::sprintf("\n    byte audio_decode_control_%d_frequency_CODES", instrumentCode));
+      trackData->writeText(fmt::sprintf("\n    byte audio_decode_control_%d_frequency_FIRST_VALUES", instrumentCode));
     }
     trackData->writeText("\n    MAC audio_decode_frequency_MACRO\n");
     trackData->writeText("    ldy audio_channel_cx,x\n");
@@ -2052,12 +2148,12 @@ void DivExportTIAZip::encodeBitstreamDynamic(
 size_t DivExportTIAZip::writeCodebookLengths(
   SafeWriter *w,
   const char *label,
-  const std::vector<CodebookEntry> &codebook
+  const std::vector<CodebookEntry> &codebook,
+  size_t &total
 ) {
   size_t bytesWritten = 0;
-  w->writeText(fmt::sprintf("\n%s_LENGTHS = . - CODEBOOK_LENGTHS - 1", label));
-  size_t currentLength = 1;
-  size_t total = 0;
+  size_t currentLength = 0;
+  w->writeText(fmt::sprintf("\n%s_LENGTHS = . - CODEBOOK_LENGTHS", label));
   for (auto &entry : codebook) {
     if (entry.height == 0) {
       continue;
@@ -2065,30 +2161,27 @@ size_t DivExportTIAZip::writeCodebookLengths(
     while (entry.height > currentLength) {
       w->writeText(fmt::sprintf("\n    byte %d", total));
       bytesWritten += 1;
-      currentLength += 1;
-      total = 0;
+      currentLength = entry.height;
     }
     total += 1;
-  }
-  if (total > 0) {
-    w->writeText(fmt::sprintf("\n    byte %d", total));
-    bytesWritten +=1;
   }
   return bytesWritten;
 }
 
-size_t DivExportTIAZip::writeCodebookLadder(
+size_t DivExportTIAZip::writeCodebookFirstValues(
   SafeWriter *w,
   const char *label,
   const std::vector<CodebookEntry> &codebook,
   const std::map<AlphaCode, std::vector<bool>> &codeIndex
 ) {
   size_t bytesWritten = 0;
-  w->writeText(fmt::sprintf("\n%s_LADDER = . - CODEBOOK_LADDER", label));
+  size_t lastHeight = 0;
+  w->writeText(fmt::sprintf("\n%s_FIRST_VALUES = . - CODEBOOK_FIRST_VALUES", label));
   for (auto &entry : codebook) {
-    if (entry.height == 0) {
+    if (entry.height == lastHeight) {
       continue;
     }
+    lastHeight = entry.height;
     AlphaCode code = entry.code;
     String bitcode = "1";
     auto it = codeIndex.find(code);
@@ -2105,6 +2198,36 @@ size_t DivExportTIAZip::writeCodebookLadder(
     //   // only take the first entry at 7 bits
     //   break;
     // }
+  }
+  return bytesWritten;
+}
+
+size_t DivExportTIAZip::writeCodebookLastValues(
+  SafeWriter *w,
+  const char *label,
+  const std::vector<CodebookEntry> &codebook,
+  const std::map<AlphaCode, std::vector<bool>> &codeIndex
+) {
+  size_t bytesWritten = 0;
+  w->writeText(fmt::sprintf("\n%s_LAST_VALUES = . - CODEBOOK_LAST_VALUES", label));
+  for (size_t i = 0; i < codebook.size(); i++) {
+    auto &entry = codebook[i];
+    if ((i + 1) < codebook.size() && entry.height == codebook[i + 1].height) {
+      continue;
+    }
+    if (entry.height > 0) {
+      AlphaCode code = entry.code;
+      String bitcode = "1";
+      auto it = codeIndex.find(code);
+      if (it != codeIndex.end()) {
+        auto &bitvec = (*it).second;  
+        for (int i = bitvec.size(); --i >= 0; ) {
+          bitcode += bitvec.at(i) ? "1" : "0";
+        }
+      }
+      w->writeText(fmt::sprintf("\n    byte <(%%%s + 1)", bitcode));
+      bytesWritten += 1;
+    }
   }
   return bytesWritten;
 }
@@ -2228,7 +2351,7 @@ void DivExportTIAZip::writeCodebookMacro(
 
   } else {
     w->writeText(fmt::sprintf("    ldx %s\n", track));
-    w->writeText(fmt::sprintf("    ldy #%s_CODES\n", label));
+    w->writeText(fmt::sprintf("    ldy #%s_FIRST_VALUES\n", label));
     w->writeText("    jsr audio_stream_read_symbol\n");
   }
   w->writeText("\n    ENDM\n\n");

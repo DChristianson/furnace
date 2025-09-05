@@ -310,28 +310,28 @@ SPAN_IDX
 audio_decode_frequency
             audio_decode_frequency_MACRO
             sta audio_fx,x
-; lead voice optimization
-;             cmp #$20
-;             bmi _audio_decode_frequency_lead
-;             lda #12
-;             sta audio_cx,x
-; _audio_decode_frequency_lead
             rts
 
 ; --- Canonical Huffman Decoder ---
 
+_symbol_read_next_bit_shift
+            iny
+            byte $2c
 audio_stream_read_symbol:
             lda #1
 _symbol_read_next_bit
             READ_BIT_SAVE_ACC
             rol 
-_symbol_climb_ladder
-            cmp CODEBOOK_LADDER,y
+            bmi _symbol_read_symbol
+            cmp CODEBOOK_FIRST_VALUES,y
             bcc _symbol_read_next_bit
-            beq _return_symbol
-            iny
-            bpl _symbol_climb_ladder
-_return_symbol:
+            cmp CODEBOOK_LAST_VALUES,y
+            bcs _symbol_read_next_bit_shift
+_symbol_read_symbol
+            adc CODEBOOK_LENGTHS,y
+            sec
+            sbc CODEBOOK_FIRST_VALUES,y
+            tay
             lda CODEBOOK_CODES,y
             ldx audio_channel_idx
             rts
