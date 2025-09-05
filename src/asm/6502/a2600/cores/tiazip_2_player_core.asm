@@ -316,6 +316,11 @@ audio_decode_frequency
 
 _symbol_read_next_bit_shift
             iny
+            lda CODEBOOK_LENGTHS,y
+            bne _symbol_read_next_bit_skip
+            iny
+_symbol_read_next_bit_skip
+            pla
             byte $2c
 audio_stream_read_symbol:
             lda #1
@@ -325,8 +330,11 @@ _symbol_read_next_bit
             bmi _symbol_read_symbol
             cmp CODEBOOK_FIRST_VALUES,y
             bcc _symbol_read_next_bit
-            cmp CODEBOOK_LAST_VALUES,y
+            pha
+            asl
+            cmp CODEBOOK_FIRST_VALUES+1,y
             bcs _symbol_read_next_bit_shift
+            pla
 _symbol_read_symbol
             adc CODEBOOK_LENGTHS,y
             sec

@@ -1989,33 +1989,34 @@ void DivExportTIAZip::encodeBitstreamDynamic(
   totalCompressedBytes += writeCodebookFirstValues(trackData, "audio_decode_duration", durationCodebook, durationCodeIndex);
   totalCompressedBytes += writeCodebookFirstValues(trackData, "audio_decode_velocity", velocityCodebook, velocityCodeIndex);
 
-  // write control and decoder tables
-  trackData->writeText(fmt::sprintf("\nCODEBOOK_LAST_VALUES"));
-  totalCompressedBytes += writeCodebookLastValues(
-    trackData, 
-    "audio_decode_command",
-    abstractCodebook,
-    abstractCodeIndex
-  );
-  totalCompressedBytes += writeCodebookLastValues(
-    trackData,
-    "audio_decode_span",
-    spanCodebook,
-    spanCodeIndex
-  );
-  totalCompressedBytes += writeCodebookLastValues(trackData, "audio_decode_control", controlCodebook, controlCodeIndex);
-  // totalCompressedBytes += writeCodebookLastValues(trackData, "audio_decode_frequency", frequencyCodebook, frequencyCodeIndex);
-  for (auto &x : mergedFrequencyCodebooks) {
-    totalCompressedBytes += writeCodebookLastValues(
-      trackData,
-      fmt::sprintf("audio_decode_control_%d_frequency", x.first).c_str(),
-      x.second,
-      mergedFrequencyCodeIndexes[x.first]
-    );
-  }
-  totalCompressedBytes += writeCodebookLastValues(trackData, "audio_decode_volume", volumeCodebook, volumeCodeIndex);
-  totalCompressedBytes += writeCodebookLastValues(trackData, "audio_decode_duration", durationCodebook, durationCodeIndex);
-  totalCompressedBytes += writeCodebookLastValues(trackData, "audio_decode_velocity", velocityCodebook, velocityCodeIndex);
+  // BUGBUG: disable
+  // // write control and decoder tables
+  // trackData->writeText(fmt::sprintf("\nCODEBOOK_LAST_VALUES"));
+  // totalCompressedBytes += writeCodebookLastValues(
+  //   trackData, 
+  //   "audio_decode_command",
+  //   abstractCodebook,
+  //   abstractCodeIndex
+  // );
+  // totalCompressedBytes += writeCodebookLastValues(
+  //   trackData,
+  //   "audio_decode_span",
+  //   spanCodebook,
+  //   spanCodeIndex
+  // );
+  // totalCompressedBytes += writeCodebookLastValues(trackData, "audio_decode_control", controlCodebook, controlCodeIndex);
+  // // totalCompressedBytes += writeCodebookLastValues(trackData, "audio_decode_frequency", frequencyCodebook, frequencyCodeIndex);
+  // for (auto &x : mergedFrequencyCodebooks) {
+  //   totalCompressedBytes += writeCodebookLastValues(
+  //     trackData,
+  //     fmt::sprintf("audio_decode_control_%d_frequency", x.first).c_str(),
+  //     x.second,
+  //     mergedFrequencyCodeIndexes[x.first]
+  //   );
+  // }
+  // totalCompressedBytes += writeCodebookLastValues(trackData, "audio_decode_volume", volumeCodebook, volumeCodeIndex);
+  // totalCompressedBytes += writeCodebookLastValues(trackData, "audio_decode_duration", durationCodebook, durationCodeIndex);
+  // totalCompressedBytes += writeCodebookLastValues(trackData, "audio_decode_velocity", velocityCodebook, velocityCodeIndex);
 
 
   // write length tables
@@ -2158,12 +2159,24 @@ size_t DivExportTIAZip::writeCodebookLengths(
     if (entry.height == 0) {
       continue;
     }
-    while (entry.height > currentLength) {
+    if (currentLength == 0) {
+      currentLength = entry.height - 1;
+    }
+    if (entry.height > currentLength) {
+      currentLength += 1;
+      if (entry.height > currentLength) {
+        w->writeText("\n    byte $00");
+        bytesWritten += 1;
+        currentLength = entry.height;
+      }
       w->writeText(fmt::sprintf("\n    byte %d", total));
       bytesWritten += 1;
-      currentLength = entry.height;
     }
     total += 1;
+  }
+  if (currentLength > 0 && currentLength < 7) {
+    w->writeText(fmt::sprintf("\n    byte %d", total));
+    bytesWritten += 1;
   }
   return bytesWritten;
 }
@@ -2181,7 +2194,6 @@ size_t DivExportTIAZip::writeCodebookFirstValues(
     if (entry.height == lastHeight) {
       continue;
     }
-    lastHeight = entry.height;
     AlphaCode code = entry.code;
     String bitcode = "1";
     auto it = codeIndex.find(code);
@@ -2191,13 +2203,24 @@ size_t DivExportTIAZip::writeCodebookFirstValues(
         bitcode += bitvec.at(i) ? "1" : "0";
       }
     }
+    if (lastHeight == 0) {
+      lastHeight = entry.height - 1;
+    } else if (lastHeight == entry.height) {
+      continue;
+    }
+    lastHeight += 1;
+    if (lastHeight < entry.height) {
+      // guard entry
+      w->writeText(fmt::sprintf("\n    byte %%%s; guard", bitcode.substr(0, lastHeight + 1)));
+      bytesWritten += 1;
+      lastHeight = entry.height;
+    }
     w->writeText(fmt::sprintf("\n    byte %%%s", bitcode));
     bytesWritten += 1;
-    // BUGBUG... think about
-    // if (entry.height == 7) {
-    //   // only take the first entry at 7 bits
-    //   break;
-    // }
+  }
+  if (lastHeight > 0 && lastHeight < 7) {
+    w->writeText("\n    byte $ff");
+    bytesWritten += 1;
   }
   return bytesWritten;
 }
