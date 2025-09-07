@@ -30,18 +30,72 @@ const size_t NUM_ZIP_CHANNELS = 2;
 class DivExportTIAZip : public DivROMExport {
 
   DivEngine* e;
-  std::vector<RegisterDump*> registerDumps;
-  std::thread* exportThread;
+  std::thread* exportThread = NULL;
   DivROMExportProgress progress[2];
   bool running, failed, mustAbort;
 
-  // 
-  // compact encoding suitable for sound effects and
-  // short game music sequences
-  //
-  // 2 bytes per channel
-  // 
-  void writeTrackDataTIAComp();
+  int jumpMapBits;
+  int compressionLevel;
+  int minSpanLength;
+  int maxSustain;
+  size_t baseDataOffset;
+  size_t blockSize;
+  int addressBits;
+  int addressIndexBits;
+
+
+  // assembly area 
+
+  std::vector<RegisterDump*> registerDumps;
+  std::vector<std::vector<AlphaCode>> codeSequences;
+  std::vector<std::vector<AlphaCode>> compressedCodeSequences;
+  std::vector<std::vector<AlphaCode>> spanSequences;
+  std::vector<Bitstream *> dataStreams;
+  std::vector<Bitstream *> trackStreams;
+
+  // huffman code generation
+
+  std::map<AlphaCode, size_t> abstractFrequencyMap;
+  std::vector<CodebookEntry> abstractCodebook;
+  HuffmanTree *abstractCodeTree = NULL;
+  std::map<AlphaCode, std::vector<bool>> abstractCodeIndex;
+
+  std::map<AlphaCode, size_t> spanFrequencyMap;
+  std::vector<CodebookEntry> spanCodebook;
+  HuffmanTree *spanTree = NULL;
+  std::map<AlphaCode, std::vector<bool>> spanCodeIndex;
+
+  std::map<AlphaCode, size_t> controlFrequencyMap;
+  std::vector<CodebookEntry> controlCodebook;
+  HuffmanTree *controlTree = NULL;
+  std::map<AlphaCode, std::vector<bool>> controlCodeIndex;
+  
+  std::map<AlphaCode, size_t> volumeFrequencyMap;
+  std::vector<CodebookEntry> volumeCodebook;
+  HuffmanTree *volumeTree = NULL;
+  std::map<AlphaCode, std::vector<bool>> volumeCodeIndex;
+
+  std::map<AlphaCode, size_t> durationFrequencyMap;
+  std::vector<CodebookEntry> durationCodebook;
+  HuffmanTree *durationTree = NULL;
+  std::map<AlphaCode, std::vector<bool>> durationCodeIndex;
+
+  std::map<AlphaCode, size_t> velocityFrequencyMap;
+  std::vector<CodebookEntry> velocityCodebook;
+  HuffmanTree *velocityTree = NULL;
+  std::map<AlphaCode, std::vector<bool>> velocityCodeIndex;
+
+  std::map<AlphaCode, std::map<AlphaCode, size_t>> initialFrequencyMap;
+  std::map<AlphaCode, AlphaCode> controlCodeMergeMap;
+  std::map<AlphaCode, std::map<AlphaCode, size_t>> mergedFrequencyMap;
+  std::map<AlphaCode, std::vector<CodebookEntry>> mergedFrequencyCodebooks;
+  std::map<AlphaCode, HuffmanTree *> mergedFrequencyTrees;
+  std::map<AlphaCode, std::map<AlphaCode, std::vector<bool>>> mergedFrequencyCodeIndexes;
+
+  // jump statistics
+  std::map<AlphaCode, size_t> jumpFrequencyMap;
+  std::map<AlphaCode, size_t> gotoFrequencyMap; 
+  std::vector<size_t> jumpTableAddresses;
 
   //
   // LZ-type encoding 
@@ -49,14 +103,12 @@ class DivExportTIAZip : public DivROMExport {
   //
   void writeTrackDataTIAZip(int compressionLevel, int minSpanLength, int maxSustain, int jumpMapBits);
   
-  void encodeBitstreamDynamic(
-    const std::vector<AlphaCode> (*codeSequences)[NUM_ZIP_CHANNELS],
-    const std::vector<AlphaCode> (*compressedCodeSequences)[NUM_ZIP_CHANNELS],
-    const std::vector<AlphaCode> (*spanSequences)[NUM_ZIP_CHANNELS],
-    int jumpMapBits,
-    int compressionLevel,
-    size_t dataOffset,
-    size_t blockSize
+  size_t encodeChannelStateCodes(
+    const ChannelState& next,
+    const char duration,
+    const ChannelState& last,
+    const int velocity,
+    std::vector<AlphaCode> &out
   );
 
   void compressCodeSequence(
@@ -67,8 +119,6 @@ class DivExportTIAZip : public DivROMExport {
     const std::map<AlphaChar, size_t> &alphaCharWeights,
     size_t branchWeight,
     const std::vector<AlphaCode>&codeSequence,
-    int compressionLevel,
-    int minSpanLength,
     std::vector<AlphaCode> &compressedCodeSequence,
     std::vector<AlphaCode> &spanSequence
   );
@@ -81,52 +131,54 @@ class DivExportTIAZip : public DivROMExport {
     const std::vector<AlphaCode> &spanSequence
   );
 
-  size_t encodeChannelStateCodes(
-    const ChannelState& next,
-    const char duration,
-    const ChannelState& last,
-    const int maxSustain,
-    const int velocity,
-    std::vector<AlphaCode> &out
-  );
+  void encodeBitstreams();
+
+  void validateBitstreams();
 
   void writeWaveformHeader(SafeWriter* w, const char* key);
+
   size_t writeCodebookLengths(
     SafeWriter* w,
     const char *label,
     const std::vector<CodebookEntry> &codebook,
     size_t &total
   );
+
   size_t writeCodebookFirstValues(
     SafeWriter* w,
     const char *label,
     const std::vector<CodebookEntry> &codebook,
     const std::map<AlphaCode, std::vector<bool>> &codeIndex
   );
+
   size_t writeCodebookLastValues(
     SafeWriter* w,
     const char *label,
     const std::vector<CodebookEntry> &codebook,
     const std::map<AlphaCode, std::vector<bool>> &codeIndex
   );
+
   size_t writeCommandCodes(
     SafeWriter* w,
     const char *label,
     const std::vector<CodebookEntry> &codebook,
     const std::map<AlphaCode, std::vector<bool>> &codeIndex
   );
+
   size_t writeDataCodes(
     SafeWriter* w,
     const char *label,
     const std::vector<CodebookEntry> &codebook,
     const std::map<AlphaCode, std::vector<bool>> &codeIndex
   );
+
   void writeCodebookMacro(
     SafeWriter* w,
     const char *label,
     const char *track,
     const std::vector<CodebookEntry> &codebook
   );
+
   void run();
 
 public:

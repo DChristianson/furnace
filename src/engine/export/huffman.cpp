@@ -33,6 +33,7 @@ unsigned long msb(unsigned long s) {
 
 
 unsigned char Bitstream::readByte() {
+  assert(pos < endPos);
   size_t s = pos % 64;
   size_t address = pos >> 6;
   pos = pos + 8;
@@ -46,6 +47,7 @@ unsigned char Bitstream::readByte() {
 }
 
 bool Bitstream::readBit() {
+  assert(pos < endPos);
   size_t s = pos % 64;
   size_t address = pos >> 6;
   uint64_t mask = ((uint64_t)1) << s;
