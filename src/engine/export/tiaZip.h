@@ -27,6 +27,12 @@
 
 const size_t NUM_ZIP_CHANNELS = 2;
 
+enum JUMP_POINTER_TYPE {
+  LONG,
+  SHORT,
+  INDEX
+};
+
 class DivExportTIAZip : public DivROMExport {
 
   DivEngine* e;
@@ -131,9 +137,20 @@ class DivExportTIAZip : public DivROMExport {
     const std::vector<AlphaCode> &spanSequence
   );
 
-  void encodeBitstreams();
+
+  void assembleBitstreams();
+
+  Bitstream * assembleDatastream(
+    const std::vector<AlphaCode> &compressedCodeSequence,
+    const std::vector<JUMP_POINTER_TYPE> &jumpTypeAssignments,
+    const std::map<AlphaCode, size_t> &jumpMap,
+    const size_t streamDataOffset,
+    std::vector<size_t> &positionMap
+  );
 
   void validateBitstreams();
+
+  void writeBitstreams();
 
   void writeWaveformHeader(SafeWriter* w, const char* key);
 

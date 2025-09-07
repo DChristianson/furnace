@@ -328,11 +328,6 @@ static const std::map<CODE_TYPE, size_t> CODE_TYPE_WEIGHTS = {
   {VELOCITY, 5}
 };
 
-enum JUMP_POINTER_SIZE {
-  LONG,
-  SHORT  
-};
-
 enum CHANGE_STATE {
   NOOP,
   CHANGE
@@ -797,7 +792,9 @@ void DivExportTIAZip::writeTrackDataTIAZip(int compressionLevel, int minSpanLeng
   // logD("span types");
   // SHOW_FREQUENCIES(spanTypeFrequencies);
 
-  encodeBitstreams();
+  assembleBitstreams();
+  validateBitstreams();
+  writeBitstreams();
 
 }
 
@@ -1086,39 +1083,9 @@ void DivExportTIAZip::compressCodeSequence(
   }
 }
 
-void DivExportTIAZip::encodeBitstreams()
+void DivExportTIAZip::assembleBitstreams()
 {
-  size_t numSongs = e->song.subsong.size();
 
-  // write track audio data
-  SafeWriter* trackData = new SafeWriter;
-  trackData->init();
-  trackData->writeText("; Furnace Tracker audio data file\n");
-  trackData->writeText("; TIAZip data format\n");
-  trackData->writeText(fmt::sprintf("; Song: %s\n", e->song.name));
-  trackData->writeText(fmt::sprintf("; Author: %s\n", e->song.author));
-
-  trackData->writeText(fmt::sprintf("\nAUDIO_NUM_TRACKS = %d\n", numSongs));
-
-  trackData->writeText("\n#include \"cores/tiazip_2_player_core.asm\"\n");
-
-  // create a lookup table for use in player apps
-  size_t songDataSize = 0;
-  // one track table for all channels
-  trackData->writeText("    MAC AUDIO_CONTROL_TABLE\n");
-  trackData->writeText("AUDIO_TRACKS:\n");
-  for (size_t subsong = 0; subsong < numSongs; subsong++) {
-    // note reverse order for copy routine
-    trackData->writeText(fmt::sprintf("    byte >(AUDIO_TRACK_S%d_C1_START - 1), <(AUDIO_TRACK_S%d_C1_START - 1)\n", subsong, subsong));
-    trackData->writeText(fmt::sprintf("    byte >(AUDIO_TRACK_S%d_C0_START - 1), <(AUDIO_TRACK_S%d_C0_START - 1)\n", subsong, subsong));
-    trackData->writeText(fmt::sprintf("    byte >(AUDIO_DATA_S%d_C1_START - 1), <(AUDIO_DATA_S%d_C1_START - 1)\n", subsong, subsong));
-    trackData->writeText(fmt::sprintf("    byte >(AUDIO_DATA_S%d_C0_START - 1), <(AUDIO_DATA_S%d_C0_START - 1)\n", subsong, subsong));
-    songDataSize += 8;
-  }
-  trackData->writeText("    ENDM\n");
-
-  size_t totalCompressedCodeSequenceSize = 0;
-  size_t totalSpanSequenceSize = 0;
   for (size_t subsong = 0; subsong < e->song.subsong.size(); subsong++) {
     for (int channel = 0; channel < NUM_ZIP_CHANNELS; channel += 1) {
       auto &compressedCodeSequence = compressedCodeSequences[subsong * NUM_ZIP_CHANNELS + channel];
@@ -1184,7 +1151,6 @@ void DivExportTIAZip::encodeBitstreams()
           assert(false);
         }
       }
-      totalCompressedCodeSequenceSize += compressedCodeSequence.size();
 
       // update jump frequencies
       for (size_t j = 0; j < spanSequence.size(); j++) {
@@ -1196,7 +1162,6 @@ void DivExportTIAZip::encodeBitstreams()
           spanFrequencyMap[spanCode]++;
         }
       }
-      totalSpanSequenceSize += spanSequence.size();
     }
   }
   logD("goto dictionary size: %d", gotoFrequencyMap.size());
@@ -1349,146 +1314,36 @@ void DivExportTIAZip::encodeBitstreams()
   dataStreams.resize(e->song.subsong.size() * NUM_ZIP_CHANNELS);
   trackStreams.resize(e->song.subsong.size() * NUM_ZIP_CHANNELS);
   jumpTableAddresses.resize(jumpMap.size());
-  std::map<CODE_TYPE, size_t> codeTypeBitsMap;
-  std::map<CODE_TYPE, size_t> codeTypeCountMap;
+
   for (size_t subsong = 0; subsong < e->song.subsong.size(); subsong++) {
     for (int channel = 0; channel < NUM_ZIP_CHANNELS; channel += 1) {
       // produce data stream
       logD("encoding data stream for %d %d", subsong, channel);
       auto &compressedCodeSequence = compressedCodeSequences[subsong * NUM_ZIP_CHANNELS + channel];
 
-      std::vector<size_t> positionMap;
-      positionMap.resize(compressedCodeSequence.size());
-      std::map<size_t, size_t> dataStreamPointerValueMap;
-      std::map<size_t, JUMP_POINTER_SIZE> dataStreamPointerSizeMap;
-
-      Bitstream *dataStream = new Bitstream(blockSize);
-      dataStreams[subsong * NUM_ZIP_CHANNELS + channel] = dataStream;
-
-      for (size_t i = 0; i < compressedCodeSequence.size(); i++) {
-        AlphaCode c = compressedCodeSequence[i];
-        size_t startPosition = dataStream->position();
-        size_t streamPosition = startPosition + streamDataOffset;
-        positionMap[i] = streamPosition;
-        CODE_TYPE type = GET_CODE_TYPE(c);
-        switch (type) {
-          case CODE_TYPE::BRANCH_POINT: {
-            logD("DATA %d %d %08x - BRANCH_POINT", subsong, channel, BITSTREAM_ADDR(dataStream->position()));
-            dataStream->writeBits(abstractCodeIndex.at(CODE_BRANCH_POINT));
-            break;
-          }
-
-          case CODE_TYPE::TAKE_DATA_JUMP: {
-            logD("DATA %d %d %08x - TAKE_DATA_JUMP", subsong, channel, BITSTREAM_ADDR(dataStream->position()));
-            dataStream->writeBits(abstractCodeIndex.at(CODE_TAKE_DATA_JUMP));
-            break;
-          }
-
-          case CODE_TYPE::WRITE_REGISTERS: {
-            AlphaCode ac = GET_CODE_WRITE_REGISTERS_MASKED(c); 
-            logD("DATA %d %d %08x - WRITE_REGISTERS", subsong, channel, BITSTREAM_ADDR(dataStream->position()));
-            dataStream->writeBits(abstractCodeIndex.at(ac));
-            CHANGE_STATE cc = GET_CODE_WRITE_CC(c);
-            if (cc == CHANGE_STATE::CHANGE) {
-              unsigned char cx = GET_CODE_WRITE_CX(c);
-              logD("DATA %d %d %08x - CX %d", subsong, channel, BITSTREAM_ADDR(dataStream->position()), cx);
-              dataStream->writeBits(controlCodeIndex.at(cx));
-            }
-            CHANGE_STATE fc = GET_CODE_WRITE_FC(c);
-            if (fc == CHANGE_STATE::CHANGE) {
-              unsigned char fx = GET_CODE_WRITE_FX(c);
-              unsigned char cx = GET_CODE_WRITE_CX(c);
-              logD("DATA %d %d %08x - FX %d", subsong, channel, BITSTREAM_ADDR(dataStream->position()), fx);
-              // dataStream->writeBits(frequencyCodeIndex.at(fx));
-              AlphaCode mfc = controlCodeMergeMap.at(cx);
-              dataStream->writeBits(mergedFrequencyCodeIndexes[mfc].at(fx));
-            }
-            CHANGE_STATE vc = GET_CODE_WRITE_VC(c);
-            if (vc == CHANGE_STATE::CHANGE) {
-              unsigned char vx = GET_CODE_WRITE_VX(c);
-              logD("DATA %d %d %08x - VX %d", subsong, channel, BITSTREAM_ADDR(dataStream->position()), vx);
-              dataStream->writeBits(volumeCodeIndex.at(vx));
-            }
-            // duration always 1
-            // unsigned char duration = GET_CODE_WRITE_DURATION(c);
-            // dataStream->writeBits(durationCodeIndex.at(duration));
-            break;
-          }
-
-          case CODE_TYPE::VOL_INC: {
-            logD("DATA %d %d %08x - VOL_INC", subsong, channel, BITSTREAM_ADDR(dataStream->position()));
-            dataStream->writeBits(abstractCodeIndex.at(CODE_VOL_INC));
-            break;
-          }
-
-          case CODE_TYPE::VOL_DEC: {
-            logD("DATA %d %d %08x - VOL_DEC", subsong, channel, BITSTREAM_ADDR(dataStream->position()));
-            dataStream->writeBits(abstractCodeIndex.at(CODE_VOL_DEC));
-            break;
-          }
-
-          case CODE_TYPE::PAUSE: {
-            unsigned char duration = GET_CODE_WRITE_DURATION(c);
-            logD("DATA %d %d %08x - PAUSE %d", subsong, channel, BITSTREAM_ADDR(dataStream->position()), duration);
-            dataStream->writeBits(abstractCodeIndex.at(CODE_PAUSE_0));
-            dataStream->writeBits(durationCodeIndex.at(duration));
-            break;
-          }
-
-          case CODE_TYPE::SUSTAIN: {
-            unsigned char duration = GET_CODE_WRITE_DURATION(c);
-            logD("DATA %d %d %08x - SUSTAIN %d", subsong, channel, BITSTREAM_ADDR(dataStream->position()), duration);
-            dataStream->writeBits(abstractCodeIndex.at(CODE_SUSTAIN_0));
-            dataStream->writeBits(durationCodeIndex.at(duration));
-            break;
-          }
-
-          case CODE_TYPE::VELOCITY: {
-            unsigned char velocity = GET_CODE_VELOCITY(c);
-            logD("DATA %d %d %08x - VELOCITY %d", subsong, channel, BITSTREAM_ADDR(dataStream->position()), velocity);
-            assert(abstractCodeIndex.find(CODE_VELOCITY_0) != abstractCodeIndex.end());
-            assert(velocityCodeIndex.find(velocity) != velocityCodeIndex.end());
-            dataStream->writeBits(abstractCodeIndex.at(CODE_VELOCITY_0));
-            dataStream->writeBits(velocityCodeIndex.at(velocity));
-            break;
-          }
-
-          case CODE_TYPE::JUMP: {
-            size_t address = GET_CODE_JUMP_ADDRESS(c);
-            auto ij = jumpMap.find(c);
-            if (ij != jumpMap.end()) {
-              size_t index = (*ij).second;
-              logD("DATA %d %d %08x - JUMP TABLE %d", subsong, channel, BITSTREAM_ADDR(dataStream->position()), index);
-              dataStream->writeBit(false); // is lookup
-              dataStream->writeBits(index, addressIndexBits);
-            } else {
-              logD("DATA %d %d %08x - JUMP ADDRESS %08x", subsong, channel, BITSTREAM_ADDR(dataStream->position()), address);
-              dataStream->writeBit(true); // no lookup
-              dataStreamPointerValueMap[dataStream->position()] = address;
-              dataStream->writeBits(address, addressBits);
-            }
-            break;
-          }
-
-          default:
-            logD("bad code %08x", c);
-            assert(false);
+      std::vector<JUMP_POINTER_TYPE> jumpTypeAssignments;
+      jumpTypeAssignments.resize(compressedCodeSequence.size());
+      for (size_t i; i < compressedCodeSequence.size(); i++) {
+        AlphaCode code = compressedCodeSequence.at(i);
+        if (GET_CODE_TYPE(code) != CODE_TYPE::JUMP) {
+          continue;
         }
-        codeTypeCountMap[type]++;
-        codeTypeBitsMap[type] += dataStream->position() - startPosition;
-
+        size_t address = GET_CODE_JUMP_ADDRESS(code);
+        JUMP_POINTER_TYPE jumpType = jumpMap.find(address) != jumpMap.end() ?
+           JUMP_POINTER_TYPE::INDEX : JUMP_POINTER_TYPE::LONG;
+        jumpTypeAssignments[i] = jumpType;    
       }
 
-      for (auto& x : dataStreamPointerValueMap) {
-        dataStream->seek(x.first);
-        size_t address = positionMap[x.second];
-        dataStream->writeBits(address, addressBits);
-        unsigned long bits = msb(address);
-        bool jumpForward = address > x.first;
-        size_t distanceBytes = (jumpForward ? address - x.first : x.first - address) >> 3;
-        unsigned long distanceBits = msb(distanceBytes) + 4;
-        logD("DATA %d %d - REMAP JUMP ADDRESS@%08x: %08x -> %08x (%08x is %d bits) (distance %d/%d is %d bits)", subsong, channel, BITSTREAM_ADDR(x.first), x.second, BITSTREAM_ADDR(address), address, bits, distanceBytes, jumpForward, distanceBits);
-      }
+      std::vector<size_t> positionMap;
+      Bitstream *dataStream = 
+        assembleDatastream(
+          compressedCodeSequence,
+          jumpTypeAssignments,
+          jumpMap,
+          streamDataOffset,
+          positionMap
+        );
+      dataStreams[subsong * NUM_ZIP_CHANNELS + channel] = dataStream;
 
       // produce track stream
       logD("encoding track stream for %d %d", subsong, channel);
@@ -1548,8 +1403,6 @@ void DivExportTIAZip::encodeBitstreams()
           assert(false);
 
         }
-        codeTypeCountMap[type]++;
-        codeTypeBitsMap[type] += trackStream->position() - startPosition;
 
       }
 
@@ -1587,21 +1440,191 @@ void DivExportTIAZip::encodeBitstreams()
     }
   }
 
-  validateBitstreams();
+}
 
-  logD("code type bits");
-  for (auto &x: codeTypeBitsMap) {
-    const double bits = x.second;
-    const double count = codeTypeCountMap.at(x.first);
-    const double avg = bits / count;
-    logD("CODE TYPE %d = %lf (%lf / %lf)", (int)x.first, avg, bits, count);
+Bitstream * DivExportTIAZip::assembleDatastream(
+  const std::vector<AlphaCode> &compressedCodeSequence,
+  const std::vector<JUMP_POINTER_TYPE> &jumpTypeAssignments,
+  const std::map<AlphaCode, size_t> &jumpMap,
+  const size_t streamDataOffset,
+  std::vector<size_t> &positionMap
+)
+{
+  Bitstream *dataStream = new Bitstream(blockSize);
+
+  std::map<size_t, size_t> jumpRevisionMap;
+  positionMap.resize(compressedCodeSequence.size());
+  for (size_t i = 0; i < compressedCodeSequence.size(); i++) {
+    AlphaCode c = compressedCodeSequence[i];
+    size_t startPosition = dataStream->position();
+    size_t streamPosition = startPosition + streamDataOffset;
+    positionMap[i] = streamPosition;
+    CODE_TYPE type = GET_CODE_TYPE(c);
+    switch (type) {
+      case CODE_TYPE::BRANCH_POINT: {
+        logD("DATA %08x - BRANCH_POINT", BITSTREAM_ADDR(dataStream->position()));
+        dataStream->writeBits(abstractCodeIndex.at(CODE_BRANCH_POINT));
+        break;
+      }
+
+      case CODE_TYPE::TAKE_DATA_JUMP: {
+        logD("DATA %08x - TAKE_DATA_JUMP", BITSTREAM_ADDR(dataStream->position()));
+        dataStream->writeBits(abstractCodeIndex.at(CODE_TAKE_DATA_JUMP));
+        break;
+      }
+
+      case CODE_TYPE::WRITE_REGISTERS: {
+        AlphaCode ac = GET_CODE_WRITE_REGISTERS_MASKED(c); 
+        logD("DATA %08x - WRITE_REGISTERS", BITSTREAM_ADDR(dataStream->position()));
+        dataStream->writeBits(abstractCodeIndex.at(ac));
+        CHANGE_STATE cc = GET_CODE_WRITE_CC(c);
+        if (cc == CHANGE_STATE::CHANGE) {
+          unsigned char cx = GET_CODE_WRITE_CX(c);
+          logD("DATA %08x - CX %d", BITSTREAM_ADDR(dataStream->position()), cx);
+          dataStream->writeBits(controlCodeIndex.at(cx));
+        }
+        CHANGE_STATE fc = GET_CODE_WRITE_FC(c);
+        if (fc == CHANGE_STATE::CHANGE) {
+          unsigned char fx = GET_CODE_WRITE_FX(c);
+          unsigned char cx = GET_CODE_WRITE_CX(c);
+          logD("DATA %08x - FX %d", BITSTREAM_ADDR(dataStream->position()), fx);
+          // dataStream->writeBits(frequencyCodeIndex.at(fx));
+          AlphaCode mfc = controlCodeMergeMap.at(cx);
+          dataStream->writeBits(mergedFrequencyCodeIndexes[mfc].at(fx));
+        }
+        CHANGE_STATE vc = GET_CODE_WRITE_VC(c);
+        if (vc == CHANGE_STATE::CHANGE) {
+          unsigned char vx = GET_CODE_WRITE_VX(c);
+          logD("DATA %08x - VX %d", BITSTREAM_ADDR(dataStream->position()), vx);
+          dataStream->writeBits(volumeCodeIndex.at(vx));
+        }
+        // duration always 1
+        // unsigned char duration = GET_CODE_WRITE_DURATION(c);
+        // dataStream->writeBits(durationCodeIndex.at(duration));
+        break;
+      }
+
+      case CODE_TYPE::VOL_INC: {
+        logD("DATA %08x - VOL_INC", BITSTREAM_ADDR(dataStream->position()));
+        dataStream->writeBits(abstractCodeIndex.at(CODE_VOL_INC));
+        break;
+      }
+
+      case CODE_TYPE::VOL_DEC: {
+        logD("DATA %08x - VOL_DEC", BITSTREAM_ADDR(dataStream->position()));
+        dataStream->writeBits(abstractCodeIndex.at(CODE_VOL_DEC));
+        break;
+      }
+
+      case CODE_TYPE::PAUSE: {
+        unsigned char duration = GET_CODE_WRITE_DURATION(c);
+        logD("DATA %08x - PAUSE %d", BITSTREAM_ADDR(dataStream->position()), duration);
+        dataStream->writeBits(abstractCodeIndex.at(CODE_PAUSE_0));
+        dataStream->writeBits(durationCodeIndex.at(duration));
+        break;
+      }
+
+      case CODE_TYPE::SUSTAIN: {
+        unsigned char duration = GET_CODE_WRITE_DURATION(c);
+        logD("DATA %08x - SUSTAIN %d", BITSTREAM_ADDR(dataStream->position()), duration);
+        dataStream->writeBits(abstractCodeIndex.at(CODE_SUSTAIN_0));
+        dataStream->writeBits(durationCodeIndex.at(duration));
+        break;
+      }
+
+      case CODE_TYPE::VELOCITY: {
+        unsigned char velocity = GET_CODE_VELOCITY(c);
+        logD("DATA %08x - VELOCITY %d", BITSTREAM_ADDR(dataStream->position()), velocity);
+        assert(abstractCodeIndex.find(CODE_VELOCITY_0) != abstractCodeIndex.end());
+        assert(velocityCodeIndex.find(velocity) != velocityCodeIndex.end());
+        dataStream->writeBits(abstractCodeIndex.at(CODE_VELOCITY_0));
+        dataStream->writeBits(velocityCodeIndex.at(velocity));
+        break;
+      }
+
+      case CODE_TYPE::JUMP: {
+        switch (jumpTypeAssignments[i]) {
+
+          case JUMP_POINTER_TYPE::INDEX: {
+            size_t index = jumpMap.at(c);
+            logD("DATA %08x - JUMP TABLE %d", BITSTREAM_ADDR(dataStream->position()), index);
+            dataStream->writeBit(false); // is lookup
+            dataStream->writeBits(index, addressIndexBits);
+            break;
+          }
+
+          case JUMP_POINTER_TYPE::LONG: {
+            size_t address = GET_CODE_JUMP_ADDRESS(c);
+            logD("DATA %08x - JUMP ADDRESS %08x", BITSTREAM_ADDR(dataStream->position()), address);
+            dataStream->writeBit(true); // no lookup
+            jumpRevisionMap[dataStream->position()] = address;
+            dataStream->writeBits(address, addressBits);
+            break;
+          }
+
+          case JUMP_POINTER_TYPE::SHORT:
+            assert(false); // not implemented
+
+        } 
+        break;
+      }
+
+      default:
+        logD("bad code %08x", c);
+        assert(false);
+    }
   }
+
+  for (auto& x : jumpRevisionMap) {
+    dataStream->seek(x.first);
+    size_t address = positionMap[x.second];
+    dataStream->writeBits(address, addressBits);
+    unsigned long bits = msb(address);
+    bool jumpForward = address > x.first;
+    size_t distanceBytes = (jumpForward ? address - x.first : x.first - address) >> 3;
+    unsigned long distanceBits = msb(distanceBytes) + 4;
+    logD("DATA - REMAP JUMP ADDRESS@%08x: %08x -> %08x (%08x is %d bits) (distance %d/%d is %d bits)", BITSTREAM_ADDR(x.first), x.second, BITSTREAM_ADDR(address), address, bits, distanceBytes, jumpForward, distanceBits);
+  }
+
+  return dataStream;
+}
+
+void DivExportTIAZip::writeBitstreams() {
 
   size_t totalCompressedBytes = 0;
 
+  size_t numSongs = e->song.subsong.size();
+
+  // write track audio data
+  SafeWriter* trackData = new SafeWriter;
+  trackData->init();
+  trackData->writeText("; Furnace Tracker audio data file\n");
+  trackData->writeText("; TIAZip data format\n");
+  trackData->writeText(fmt::sprintf("; Song: %s\n", e->song.name));
+  trackData->writeText(fmt::sprintf("; Author: %s\n", e->song.author));
+
+  trackData->writeText(fmt::sprintf("\nAUDIO_NUM_TRACKS = %d\n", numSongs));
+
+  trackData->writeText("\n#include \"cores/tiazip_2_player_core.asm\"\n");
+
+  // create a lookup table for use in player apps
+  size_t songDataSize = 0;
+  // one track table for all channels
+  trackData->writeText("    MAC AUDIO_CONTROL_TABLE\n");
+  trackData->writeText("AUDIO_TRACKS:\n");
+  for (size_t subsong = 0; subsong < numSongs; subsong++) {
+    // note reverse order for copy routine
+    trackData->writeText(fmt::sprintf("    byte >(AUDIO_TRACK_S%d_C1_START - 1), <(AUDIO_TRACK_S%d_C1_START - 1)\n", subsong, subsong));
+    trackData->writeText(fmt::sprintf("    byte >(AUDIO_TRACK_S%d_C0_START - 1), <(AUDIO_TRACK_S%d_C0_START - 1)\n", subsong, subsong));
+    trackData->writeText(fmt::sprintf("    byte >(AUDIO_DATA_S%d_C1_START - 1), <(AUDIO_DATA_S%d_C1_START - 1)\n", subsong, subsong));
+    trackData->writeText(fmt::sprintf("    byte >(AUDIO_DATA_S%d_C0_START - 1), <(AUDIO_DATA_S%d_C0_START - 1)\n", subsong, subsong));
+    songDataSize += 8;
+  }
+  trackData->writeText("    ENDM\n");
+
   // write the data streams
   trackData->writeText("\nAUDIO_DATA_OFFSET");
-  for (size_t subsong = 0; subsong < e->song.subsong.size(); subsong++) {
+  for (size_t subsong = 0; subsong < numSongs; subsong++) {
     for (int channel = 0; channel < NUM_ZIP_CHANNELS; channel += 1) {
       trackData->writeText(fmt::sprintf("\nAUDIO_DATA_S%d_C%d_START", subsong, channel));
       Bitstream *dataStream = dataStreams[subsong * NUM_ZIP_CHANNELS + channel];
@@ -1625,7 +1648,7 @@ void DivExportTIAZip::encodeBitstreams()
   }
 
   // write the track streams
-  for (size_t subsong = 0; subsong < e->song.subsong.size(); subsong++) {
+  for (size_t subsong = 0; subsong < numSongs; subsong++) {
     for (int channel = 0; channel < NUM_ZIP_CHANNELS; channel += 1) {
       trackData->writeText(fmt::sprintf("\nAUDIO_TRACK_S%d_C%d_START", subsong, channel));
       Bitstream *trackStream = trackStreams[subsong * NUM_ZIP_CHANNELS + channel];
@@ -1825,6 +1848,16 @@ void DivExportTIAZip::encodeBitstreams()
   writeCodebookMacro(trackData, "audio_decode_velocity", "audio_data_stream_idx", velocityCodebook);
 
   trackData->writeText(fmt::sprintf("\n\n; Song data size: %d\n", songDataSize));
+
+  size_t totalCompressedCodeSequenceSize = 0;
+  for (auto &x : compressedCodeSequences) {
+    totalCompressedCodeSequenceSize += x.size();
+  }
+  size_t totalSpanSequenceSize = 0;
+  for (auto &x : spanSequences) {
+    totalSpanSequenceSize += spanSequences.size();
+  }
+
   trackData->writeText(fmt::sprintf("; Compressed Code Sequence Length: %d\n", totalCompressedCodeSequenceSize));
   trackData->writeText(fmt::sprintf("; Span Sequence Length: %d\n", totalSpanSequenceSize));
   trackData->writeText(fmt::sprintf("; Compressed Bytes %d\n", totalCompressedBytes));

@@ -365,23 +365,6 @@ _audio_skip_bits
 
     ENDM
 
-    MAC READ_BIT
-            ; read one data bit from audio stream
-            ; uses a sentinel bit and a few tricks picked up from
-            ; http://forum.6502.org/viewtopic.php?f=2&t=4642    
-            lsr audio_stream_buf,x
-            bne ._audio_read_bit_end
-            inc audio_stream_lo,x
-            bne ._audio_read_bit_same_page
-            inc audio_stream_hi,x
-._audio_read_bit_same_page
-            lda (audio_stream_ptr,x)
-            sec ; set sentinel bit
-            ror
-            sta audio_stream_buf,x
-._audio_read_bit_end
-    ENDM
-
     MAC READ_BIT_SAVE_ACC
             ; read one data bit from audio stream
             ; uses a sentinel bit and a few tricks picked up from
