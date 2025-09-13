@@ -44,59 +44,60 @@ class DivExportTIAZip : public DivROMExport {
   int compressionLevel;
   int minSpanLength;
   int maxSustain;
+  bool branchPointerOptimization;
   size_t baseDataOffset;
   size_t blockSize;
   int addressBits;
   int addressIndexBits;
-
 
   // assembly area 
 
   std::vector<RegisterDump*> registerDumps;
   std::vector<std::vector<AlphaCode>> codeSequences;
   std::vector<std::vector<AlphaCode>> compressedCodeSequences;
-  std::vector<std::vector<AlphaCode>> spanSequences;
+  std::vector<std::vector<AlphaCode>> trackSequences;
+  std::vector<std::map<size_t, size_t>> trackPositionMaps; // for each track jump, starting data stream position
   std::vector<Bitstream *> dataStreams;
   std::vector<Bitstream *> trackStreams;
 
   // huffman code generation
 
-  std::map<AlphaCode, size_t> abstractFrequencyMap;
-  std::vector<CodebookEntry> abstractCodebook;
-  HuffmanTree *abstractCodeTree = NULL;
-  std::map<AlphaCode, std::vector<bool>> abstractCodeIndex;
+  std::map<AlphaCode, size_t> dataCommandFrequencyMap;
+  std::vector<CodebookEntry> dataCommandCodebook;
+  HuffmanTree *dataCommandCodeTree = NULL;
+  std::map<AlphaCode, std::vector<bool>> dataCommandCodes;
 
-  std::map<AlphaCode, size_t> spanFrequencyMap;
-  std::vector<CodebookEntry> spanCodebook;
-  HuffmanTree *spanTree = NULL;
-  std::map<AlphaCode, std::vector<bool>> spanCodeIndex;
+  std::map<AlphaCode, size_t> trackCommandFrequencyMap;
+  std::vector<CodebookEntry> trackCommandCodebook;
+  HuffmanTree *trackCommandTree = NULL;
+  std::map<AlphaCode, std::vector<bool>> trackCommandCodes;
 
   std::map<AlphaCode, size_t> controlFrequencyMap;
   std::vector<CodebookEntry> controlCodebook;
   HuffmanTree *controlTree = NULL;
-  std::map<AlphaCode, std::vector<bool>> controlCodeIndex;
+  std::map<AlphaCode, std::vector<bool>> controlCodes;
   
   std::map<AlphaCode, size_t> volumeFrequencyMap;
   std::vector<CodebookEntry> volumeCodebook;
   HuffmanTree *volumeTree = NULL;
-  std::map<AlphaCode, std::vector<bool>> volumeCodeIndex;
+  std::map<AlphaCode, std::vector<bool>> volumeCodes;
 
   std::map<AlphaCode, size_t> durationFrequencyMap;
   std::vector<CodebookEntry> durationCodebook;
   HuffmanTree *durationTree = NULL;
-  std::map<AlphaCode, std::vector<bool>> durationCodeIndex;
+  std::map<AlphaCode, std::vector<bool>> durationCodes;
 
   std::map<AlphaCode, size_t> velocityFrequencyMap;
   std::vector<CodebookEntry> velocityCodebook;
   HuffmanTree *velocityTree = NULL;
-  std::map<AlphaCode, std::vector<bool>> velocityCodeIndex;
+  std::map<AlphaCode, std::vector<bool>> velocityCodes;
 
   std::map<AlphaCode, std::map<AlphaCode, size_t>> initialFrequencyMap;
   std::map<AlphaCode, AlphaCode> controlCodeMergeMap;
   std::map<AlphaCode, std::map<AlphaCode, size_t>> mergedFrequencyMap;
   std::map<AlphaCode, std::vector<CodebookEntry>> mergedFrequencyCodebooks;
   std::map<AlphaCode, HuffmanTree *> mergedFrequencyTrees;
-  std::map<AlphaCode, std::map<AlphaCode, std::vector<bool>>> mergedFrequencyCodeIndexes;
+  std::map<AlphaCode, std::map<AlphaCode, std::vector<bool>>> mergedFrequencyCodes;
 
   // jump statistics
   std::map<AlphaCode, size_t> jumpFrequencyMap;
@@ -126,7 +127,8 @@ class DivExportTIAZip : public DivROMExport {
     size_t branchWeight,
     const std::vector<AlphaCode>&codeSequence,
     std::vector<AlphaCode> &compressedCodeSequence,
-    std::vector<AlphaCode> &spanSequence
+    std::vector<AlphaCode> &trackSequence,
+    std::map<size_t, size_t> &trackPositionMap
   );
 
   void validateCodeSequence(
@@ -134,7 +136,7 @@ class DivExportTIAZip : public DivROMExport {
     int channel,
     const std::vector<AlphaCode> &codeSequence,
     const std::vector<AlphaCode> &compressedCodeSequence,
-    const std::vector<AlphaCode> &spanSequence
+    const std::vector<AlphaCode> &trackSequence
   );
 
 
@@ -145,7 +147,8 @@ class DivExportTIAZip : public DivROMExport {
     const std::vector<JUMP_POINTER_TYPE> &jumpTypeAssignments,
     const std::map<AlphaCode, size_t> &jumpMap,
     const size_t streamDataOffset,
-    std::vector<size_t> &positionMap
+    std::vector<size_t> &positionMap,
+    std::vector<size_t> &tooBigJumps
   );
 
   void validateBitstreams();

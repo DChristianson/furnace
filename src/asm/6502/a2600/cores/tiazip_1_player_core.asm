@@ -1,43 +1,69 @@
-; TIAZIP 1
-; Compact coded audio data with zip compression
-;
-
     MAC AUDIO_VARS
 
+audio_track           ds 1
+
+audio_channel_idx     ds 1
+audio_data_stream_idx ds 1
+audio_span_stream_idx ds 1
+
 audio_stream_ptr
-audio_data_0_ptr        ds 2   ; channel 0
-audio_data_1_ptr        ds 2   ; channel 1
-audio_track_0_ptr       ds 2   ; channel 0
-audio_track_1_ptr       ds 2   ; channel 1
-audio_jump_0_ptr        ds 2   ; channel 0
-audio_jump_1_ptr        ds 2   ; channel 1
+audio_stream_lo
+audio_stream_hi = . + 1
+audio_data_0_ptr      ds 2 ; channel 0 data stream
+audio_data_1_ptr      ds 2 ; channel 1 data stream
+audio_span_0_ptr      ds 2 ; channel 0 span stream
+audio_span_1_ptr      ds 2 ; channel 1 span stream
 
-audio_data_last_addr           
-audio_data_0_last_addr  ds 2
-audio_data_1_last_addr  ds 2
-audio_data_max_addr
-audio_data_0_max_addr   ds 2
-audio_data_1_max_addr   ds 2
+audio_timer
+audio_timer_0         ds 1
+audio_timer_1         ds 1
 
-audio_data_0_shift      ds 1
-audio_track_0_shift     ds 1
-audio_data_1_shift      ds 1
-audio_track_1_shift     ds 1
+audio_stream_buf  
+audio_data_0_buf      ds 1 ; channel 0 data stream
+audio_stream_next_addr_lo
+first_code            ds 1
+audio_data_1_buf      ds 1 ; channel 1 data stream
+audio_stream_next_addr_hi
+first_idx             ds 1
+audio_span_0_buf      ds 1 ; channel 0 span stream
+audio_stream_next_addr_buf
+curr_code_len         ds 1 ; BUGBUG: unused
+audio_span_1_buf      ds 1 ; channel 1 span stream
+command_ptr
+command_ptr_lo
+symbol                ds 1
+command_ptr_hi        ds 1
 
-audio_timer 
-audio_timer_0       ds 1   ; 
-audio_timer_1       ds 1   ; 
-audio_track         ds 1
+audio_data_last_ptr
+audio_data_last_lo
+audio_data_last_hi = . + 1
+audio_data_0_last_ptr ds 2 ; position where we took last jump in data stream
+audio_data_1_last_ptr ds 2 ; 
+audio_data_ff_ptr
+audio_data_ff_lo
+audio_data_ff_hi = . + 1
+audio_data_0_ff_ptr   ds 2 ; max position where we took last jump in data stream
+audio_data_1_ff_ptr   ds 2 ; 
+audio_data_last_buf
+audio_data_0_last_buf ds 1 ; last jump buffer state
+audio_data_ff_buf
+audio_data_0_ff_buf   ds 1
+audio_data_1_last_buf ds 1
+audio_data_1_ff_buf   ds 1
+
+audio_channel_cx      ds 2
+audio_channel_dv      ds 2
+audio_channel_vx      ds 2
+
     ENDM
 
     IFNCONST audio_cx
 audio_cx = AUDC0
 audio_fx = AUDF0 
-audio_vx ds 2
+audio_vx = AUDV0 
     ENDIF
 
-
-
+    MAC AUDIO_CONTROLS
 audio_inc_track
             ldy audio_track
             iny
@@ -53,7 +79,6 @@ audio_dec_track
 _audio_track_save
             sty audio_track
             rts
-
 audio_play_track
             lda audio_track
             asl
@@ -63,120 +88,298 @@ audio_play_track
             ldx #7
 _audio_play_setup_loop
             lda AUDIO_TRACKS,y
-            ; BUGBUG: will be off
-            sta audio_data_ptr,x
-            sta audio_last_ptr,x
-            sta audio_front_ptr,x
+            sta audio_stream_ptr,x
             iny
             dex
             bpl _audio_play_setup_loop
+            ldx #3
+_audio_play_pointer_copy
+            lda audio_stream_ptr,x
+            sta audio_data_last_ptr,x
+            sta audio_data_ff_ptr,x
+            dex
+            bpl _audio_play_pointer_copy
             lda #0
             sta audio_timer_0
             sta audio_timer_1
-            sta audio_data_0_bits
-            sta audio_data_1_bits
+            sta audio_data_0_buf
+            sta audio_data_1_buf
+            sta audio_vx
+            sta audio_vx+1
+            lda #>CODE_WRITE_REGISTERS_111
+            sta command_ptr_hi
             rts
+    ENDM
 
+    MAC AUDIO_UPDATE
+
+ADDRESS_INDEX_BITS = 5
+ADDRESS_BITS_HI = 4
+ADDRESS_BITS_LO = 8
+ADDRESS_BITS_BUF = 3
+ADDRESS_BITS = 15
+
+; --- Bit reading ---
 audio_update
-            ldx #2 ; loop over both audio channels
-            ldy #1
-_audio_loop
+            ldx #1
+_audio_update_loopback:
+            stx audio_channel_idx
+            txa
+            asl
+            sta audio_data_stream_idx
+            lda SPAN_IDX,x
+            sta audio_span_stream_idx
             lda audio_timer,x
-            beq _audio_next_note
+            beq _audio_update_next_command
             dec audio_timer,x
-            jmp _audio_next_channel
-_audio_next_note
-            ... do all the things
-_audio_next_channel
-            ldx #0
+            bpl _audio_update_next_channel
+_audio_update_next_command
+            audio_decode_command_MACRO
+            sta command_ptr_lo
+            jmp (command_ptr)
+CODE_WRITE_REGISTERS_111:
+            audio_decode_control_MACRO
+            sta audio_cx,x
+            sta audio_channel_cx,x
+CODE_WRITE_REGISTERS_011:
+            jsr audio_decode_frequency
+CODE_WRITE_REGISTERS_001:
+            audio_decode_volume_MACRO
+            bmi CODE_VELOCITY
+            sta audio_channel_vx,x
+            lda #0
+CODE_VELOCITY
+            sta audio_channel_dv,x
+            clc
+            adc audio_channel_vx,x
+            and #0x0f
+            sta audio_channel_vx,x
+            jmp _audio_update_next_channel
+CODE_WRITE_REGISTERS_010:
+            jsr audio_decode_frequency
+            jmp _audio_update_vx ; BUGBUG space?
+CODE_SUSTAIN:
+            audio_decode_duration_MACRO
+            sta audio_timer,x
+_audio_update_vx
+            lda audio_channel_dv,x
+            jmp CODE_VELOCITY
+CODE_BRANCH_POINT:
+            audio_decode_span_MACRO
+            sta command_ptr_lo
+            jmp (command_ptr)
+CODE_STOP = audio_play_track
+CODE_SKIP:
+            jsr audio_data_stream_skip_address
+            jmp _audio_update_next_command 
+_audio_update_next_channel
+            lda audio_channel_vx,x
+            sta audio_vx,x
+            dex
+            bpl _audio_update_loopback
+            rts
+CODE_RETURN_FF:
+            ldx audio_data_stream_idx
+            lda audio_data_ff_lo,x
+            sta audio_stream_lo,x
+            lda audio_data_ff_hi,x
+            sta audio_stream_hi,x
+            lda audio_data_ff_buf,x
+            jmp _audio_end_shift_loop ; BUGBUG true?
+CODE_RETURN_LAST:
+            ldx audio_data_stream_idx
+            lda audio_data_last_lo,x
+            sta audio_stream_lo,x
+            lda audio_data_last_hi,x
+            sta audio_stream_hi,x
+            lda audio_data_last_buf,x
+            jmp _audio_end_shift_loop ; BUGBUG true?
+CODE_TAKE_TRACK_JUMP:
+            jsr audio_data_stream_skip_address
+            ldx audio_span_stream_idx
+            byte $2c ; skip next 2 bytes
+CODE_TAKE_DATA_JUMP:
+            ldx audio_data_stream_idx
+            ; jump to a location on the data stream
+            ; 15 bits of address coords on stack
+            ;  hhhhlll lllllsss - h = high bits, l = low bits, s = shift
+            lda audio_stream_buf,x
+            READ_BIT_NO_SAVE_BUF
+            bcs _audio_stream_read_in_stream
+            ldy #%00001000
+            sty symbol
+_audio_stream_read_jump_idx
+            READ_BIT_NO_SAVE_BUF
+            rol symbol
+            bcc _audio_stream_read_jump_idx
+            sta audio_stream_buf,x
+            ldy symbol
+            lda AUDIO_JUMP_TABLE_LO_START,y
+            sta audio_stream_next_addr_lo
+            lda AUDIO_JUMP_TABLE_HI_START,y
+            and #$0f
+            sta audio_stream_next_addr_hi
+            lda AUDIO_JUMP_TABLE_HI_START,y
+            lsr
+            lsr
+            lsr
+            lsr
+            sta audio_stream_next_addr_buf
+            bpl _audio_stream_read_return
+_audio_stream_read_in_stream
+            ldy #%00010000
+            sty audio_stream_next_addr_hi
+_audio_stream_read_hi
+            READ_BIT_NO_SAVE_BUF
+            rol audio_stream_next_addr_hi
+            bcc _audio_stream_read_hi
+            ldy #%00000001
+            sty audio_stream_next_addr_lo
+_audio_stream_read_lo
+            READ_BIT_NO_SAVE_BUF
+            rol audio_stream_next_addr_lo
+            bcc _audio_stream_read_lo
+            ldy #%00100000
+            sty audio_stream_next_addr_buf
+_audio_stream_read_buf
+            READ_BIT_NO_SAVE_BUF
+            rol audio_stream_next_addr_buf
+            bcc _audio_stream_read_buf
+            sta audio_stream_buf,x
+_audio_stream_read_return
+            ldx audio_data_stream_idx
+            lda audio_stream_buf,x
+            sta audio_data_last_buf,x
+            lda audio_stream_lo,x
+            sta audio_data_last_lo,x   
+            lda audio_stream_hi,x
+            sta audio_data_last_hi,x
+            cmp audio_data_ff_hi,x
+            bne _audio_stream_save_ff
+            lda audio_data_last_lo,x
+            cmp audio_data_ff_lo,x
+            bne _audio_stream_save_ff
+            lda audio_data_ff_buf,x
+            cmp audio_data_last_buf,x
+_audio_stream_save_ff
+            bcc _audio_stream_save_return
+            lda audio_data_last_buf,x
+            sta audio_data_ff_buf,x
+            lda audio_data_last_lo,x
+            sta audio_data_ff_lo,x
+            lda audio_data_last_hi,x
+            sta audio_data_ff_hi,x
+_audio_stream_save_return
+            lda audio_stream_next_addr_lo
+            sta audio_stream_lo,x
+            lda audio_stream_next_addr_hi
+            sta audio_stream_hi,x
+            lda audio_stream_next_addr_buf
+            beq _audio_skip_shift
+            tay
+            lda (audio_stream_ptr,x)
+            sec
+            ror
             dey
-            bpl _audio_loop
+            beq _audio_end_shift_loop
+_audio_do_shift_loop
+            lsr
+            dey
+            bne _audio_do_shift_loop
+_audio_end_shift_loop
+_audio_skip_shift
+            sta audio_stream_buf,x
+            ldx audio_channel_idx
+            jmp _audio_update_next_command
+               
+SPAN_IDX
+  byte 4,6
+
+audio_decode_frequency
+            audio_decode_frequency_MACRO
+            sta audio_fx,x
             rts
 
-_audio_track_jump
-            ; pull an address from jump stream
-            ...
-_audio_track_return_last
-            ...
-_audio_track_return_front
-            ...
+; --- Canonical Huffman Decoder ---
 
-_audio_skip
-            ....
-
-_audio_goto 
-            
-            inc audio_stream_ptr,x
-            bne _audio_jump_same_page
-            inc audio_stream_ptr+1,x
-_audio_jump_same_page
-            lda (audio_stream_ptr,x)
-
-            clc
-_load_first_byte            ror
-            bne _load_first_byte
-            lda audio_data_shift,x
-
-            ; pull an address from data stream
-            pha
-            jsr audio_data_advance
-            lda (audio_data_ptr,x) 
-            sta audio_data_ptr,x
+_symbol_read_next_bit_shift
+            iny
+            lda CODEBOOK_LENGTHS,y
+            bne _symbol_read_next_bit_skip
+            iny
+_symbol_read_next_bit_skip
             pla
-            sta audio_data_ptr+1,x
-            jmp _audio_next_note
+            byte $2c
+audio_stream_read_symbol:
+            lda #1
+_symbol_read_next_bit
+            READ_BIT_SAVE_ACC
+            rol 
+            bmi _symbol_read_symbol
+            cmp CODEBOOK_FIRST_VALUES,y
+            bcc _symbol_read_next_bit
+            pha
+            asl
+            cmp CODEBOOK_FIRST_VALUES+1,y
+            bcs _symbol_read_next_bit_shift
+            pla
+_symbol_read_symbol
+            adc CODEBOOK_LENGTHS,y
+            sec
+            sbc CODEBOOK_FIRST_VALUES,y
+            tay
+            lda CODEBOOK_CODES,y
+            ldx audio_channel_idx
+            rts
 
+audio_data_stream_skip_address
+            ldx audio_data_stream_idx
+            lda audio_stream_buf,x
+            READ_BIT_NO_SAVE_BUF
+            ldy #(ADDRESS_INDEX_BITS - 1)
+            bcc _audio_skip_bits
+            ldy #(ADDRESS_BITS - 1)
+_audio_skip_bits
+            READ_BIT_NO_SAVE_BUF
+            dey
+            bpl _audio_skip_bits
+            sta audio_stream_buf,x
+            rts
+
+    ENDM
+
+    MAC READ_BIT_SAVE_ACC
             ; read one data bit from audio stream
             ; uses a sentinel bit and a few tricks picked up from
             ; http://forum.6502.org/viewtopic.php?f=2&t=4642    
-audio_read_bit
-            lsr audio_stream_shift,x
-            bne _audio_read_data_bit_end
-            inc audio_stream_ptr,x
-            bne _audio_read_bit_same_page
-            inc audio_stream_ptr+1,x
-_audio_read_bit_same_page
+            lsr audio_stream_buf,x
+            bne ._audio_read_bit_end
+            inc audio_stream_lo,x
+            bne ._audio_read_bit_same_page
+            inc audio_stream_hi,x
+._audio_read_bit_same_page
+            pha
             lda (audio_stream_ptr,x)
+            sec ; set sentinel bit
             ror
-            sta audio_stream_shift,x
-_audio_read_bit_end
-            rts
+            sta audio_stream_buf,x
+            pla
+._audio_read_bit_end
+    ENDM
 
-            ; jump to a location on the data stream
-            ; address coords on stack
-            ;  hhhhhlll lllllsss - h = high bits, l = low bits, s = shift
-audio_jump_address
-            ; BUGBUG: way to efficiently save last and front
-            pla
-            sta audio_stream_ptr+1,x
-            pla
-            sta audio_stream_ptr,x
-            ; 3x shift down
-            lsr audio_stream_ptr+1,x
-            lsr audio_stream_ptr,x
-            lsr audio_stream_ptr+1,x
-            lsr audio_stream_ptr,x
-            lsr audio_stream_ptr+1,x
-            lsr audio_stream_ptr,x
-            ; setup shift register
-            and #$07
-            tay
+    MAC READ_BIT_NO_SAVE_BUF
+            ; read one data bit from audio stream
+            ; uses a sentinel bit and a few tricks picked up from
+            ; http://forum.6502.org/viewtopic.php?f=2&t=4642    
+            lsr 
+            bne ._audio_read_bit_end    ; SPEED: takes way too many lines long when we inc twice
+            inc audio_stream_lo,x
+            bne ._audio_read_bit_same_page
+            inc audio_stream_hi,x
+._audio_read_bit_same_page
             lda (audio_stream_ptr,x)
-            dey
-            bmi _audio_shift_back
-            sec
-_audio_jump_shift
-            lsr
-            dey
-            bne _audio_jump_shift
-            sta audio_data_shift,x
-            rts
-_audio_shift_back
-            lda audio_stream_ptr,x
-            beq _audio_shift_back_same_page
-            dec audio_stream_ptr+1,x
-_audio_shift_back_same_page
-            dec audio_stream_ptr,x
-            lda #1
-            sta audio_data_bits,x
-            rts
+            sec ; set sentinel bit
+            ror
+._audio_read_bit_end
+    ENDM
+

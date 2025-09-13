@@ -146,6 +146,8 @@ vis_title_end       ds 1
 
         AUDIO_UPDATE
 
+    ORG $8200
+
     #include "Track_data.asm"
 
   END_BANK

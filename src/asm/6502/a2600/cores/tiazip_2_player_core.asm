@@ -206,12 +206,12 @@ CODE_TAKE_DATA_JUMP:
             lda audio_stream_buf,x
             READ_BIT_NO_SAVE_BUF
             bcs _audio_stream_read_in_stream
-            ldy #%00001000
+            ldy #%11110000
             sty symbol
 _audio_stream_read_jump_idx
             READ_BIT_NO_SAVE_BUF
             rol symbol
-            bcc _audio_stream_read_jump_idx
+            bcs _audio_stream_read_jump_idx
             sta audio_stream_buf,x
             ldy symbol
             lda AUDIO_JUMP_TABLE_LO_START,y
@@ -227,25 +227,28 @@ _audio_stream_read_jump_idx
             sta audio_stream_next_addr_buf
             bpl _audio_stream_read_return
 _audio_stream_read_in_stream
-            ldy #%00010000
+            READ_BIT_NO_SAVE_BUF
+            ldy #%11100000
             sty audio_stream_next_addr_hi
+            bcc _audio_stream_read_short
 _audio_stream_read_hi
             READ_BIT_NO_SAVE_BUF
             rol audio_stream_next_addr_hi
-            bcc _audio_stream_read_hi
-            ldy #%00000001
+            bcs _audio_stream_read_hi
+_audio_stream_read_short
+            ldy #%11111110
             sty audio_stream_next_addr_lo
 _audio_stream_read_lo
             READ_BIT_NO_SAVE_BUF
             rol audio_stream_next_addr_lo
-            bcc _audio_stream_read_lo
-            ldy #%00100000
+            bcs _audio_stream_read_lo
+            ldy #%11000000
             sty audio_stream_next_addr_buf
 _audio_stream_read_buf
             READ_BIT_NO_SAVE_BUF
             rol audio_stream_next_addr_buf
-            bcc _audio_stream_read_buf
-            sta audio_stream_buf,x
+            bcs _audio_stream_read_buf
+            sta audio_stream_buf,x ; need to save buf
 _audio_stream_read_return
             ldx audio_data_stream_idx
             lda audio_stream_buf,x
@@ -270,16 +273,31 @@ _audio_stream_save_ff
             lda audio_data_last_hi,x
             sta audio_data_ff_hi,x
 _audio_stream_save_return
+            bit audio_stream_next_addr_hi
+            bpl _audio_jump_long
+            ldy #0
+            lda audio_stream_next_addr_lo
+            bpl _audio_jump_short
+            ldy #$ff
+            eor #$7f
+            adc #0 ; carry set
+_audio_jump_short
+            clc
+            adc audio_stream_lo,x
+            sta audio_stream_lo,x
+            tya
+            adc audio_stream_hi,x
+            sta audio_stream_hi,x
+            jmp _audio_jump_shift
+_audio_jump_long
+            lda audio_stream_next_addr_lo
+            sta audio_stream_lo,x
+            lda audio_stream_next_addr_hi
+            sta audio_stream_hi,x
+_audio_jump_shift
             lda audio_stream_next_addr_buf
             beq _audio_skip_shift
             tay
-            lda audio_stream_next_addr_lo
-            clc
-            adc #<(AUDIO_DATA_OFFSET) ; SPEED: we could overlay offset into track data?
-            sta audio_stream_lo,x
-            lda audio_stream_next_addr_hi
-            adc #>(AUDIO_DATA_OFFSET)  ; SPEED: we could overlay into track data?
-            sta audio_stream_hi,x
             lda (audio_stream_ptr,x)
             sec
             ror
@@ -290,20 +308,11 @@ _audio_do_shift_loop
             dey
             bne _audio_do_shift_loop
 _audio_end_shift_loop
+_audio_skip_shift
             sta audio_stream_buf,x
             ldx audio_channel_idx
             jmp _audio_update_next_command   
-_audio_skip_shift
-            sta audio_stream_buf,x ; acc already zero 
-            lda audio_stream_next_addr_lo
-            clc
-            adc #<(AUDIO_DATA_OFFSET-1) ; SPEED: we could overlay offset into track data?
-            sta audio_stream_lo,x
-            lda audio_stream_next_addr_hi
-            adc #>(AUDIO_DATA_OFFSET-1)  ; SPEED: we could overlay into track data?
-            sta audio_stream_hi,x
-            ldx audio_channel_idx
-            jmp _audio_update_next_command            
+
 SPAN_IDX
   byte 4,6
 
@@ -349,17 +358,15 @@ audio_data_stream_skip_address
             lda audio_stream_buf,x
             READ_BIT_NO_SAVE_BUF
             ldy #(ADDRESS_INDEX_BITS - 1)
-            bcc _audio_skip_bits
-            ; jump ahead one byte
-            inc audio_stream_lo,x
-            bne ._audio_skip_same_page
-            inc audio_stream_hi,x
-._audio_skip_same_page
-            ldy #(ADDRESS_BITS - 8 - 1)
-_audio_skip_bits
+            bcc ._audio_skip_bits
+            READ_BIT_NO_SAVE_BUF
+            ldy #(11 - 1)
+            bcc ._audio_skip_bits
+            ldy #(ADDRESS_BITS - 1)
+._audio_skip_bits
             READ_BIT_NO_SAVE_BUF
             dey
-            bpl _audio_skip_bits
+            bpl ._audio_skip_bits
             sta audio_stream_buf,x
             rts
 

@@ -193,8 +193,8 @@ DivExportTIAZip::~DivExportTIAZip() {
     delete registerDump;
   }
 
-  delete abstractCodeTree;
-  delete spanTree;
+  delete dataCommandCodeTree;
+  delete trackCommandTree;
   delete controlTree;
   for (auto &x: mergedFrequencyTrees) {
     delete x.second;
@@ -238,7 +238,8 @@ void DivExportTIAZip::run() {
   minSpanLength = conf.getInt("minSpanLength", 3);
   maxSustain = conf.getInt("maxSustain", 16);
   jumpMapBits = conf.getInt("jumpMapBits", 5);
-  baseDataOffset = 0x0000;
+  branchPointerOptimization = conf.getBool("bpo", false);
+  baseDataOffset = 0x0200;
   blockSize = 4096 * 8;
   addressBits = 15;
   addressIndexBits = jumpMapBits;
@@ -390,14 +391,14 @@ const AlphaCode CODE_RETURN_LAST = ((AlphaCode) RETURN_LAST) << 56;
 const AlphaCode CODE_RETURN_FF = ((AlphaCode) RETURN_FF) << 56;
 const AlphaCode CODE_RETURN_NOOP = ((AlphaCode) RETURN_NOOP) << 56;
 
-AlphaCode CODE_JUMP(size_t subsong, int channel, size_t address) {
+AlphaCode CODE_JUMP(size_t subsong, int channel, size_t targetIndex) {
   return ((AlphaCode)JUMP << 56) | 
          ((AlphaCode)subsong << 48) |
          ((AlphaCode)channel << 40) |
-         address;
+         targetIndex;
 }
 
-size_t GET_CODE_JUMP_ADDRESS(const AlphaCode c) {
+size_t GET_CODE_JUMP_INDEX(const AlphaCode c) {
   return c & 0x1fff;
 }
 
@@ -449,9 +450,18 @@ unsigned char GET_CODE_VELOCITY(const AlphaCode c) {
   return (c & 0xff);
 }
 
-size_t BITSTREAM_ADDR(size_t addr) {
+size_t GET_ADDRESS_COMPONENTS(size_t addr) {
   return ((addr << 1) & 0x3ff0) | (addr & 0x7);
 }
+
+size_t BITSTREAM_2_ADDRESS(size_t address) {
+  return (address - 1) & 0x7fff;
+}
+
+size_t ADDRESS_2_BITSTREAM(size_t address) {
+  return (address + 1) & 0x7fff;
+}
+
 
 // BUGBUG: STATS
 size_t CALC_ENTROPY(const std::map<AlphaCode, size_t> &frequencyMap) {
@@ -672,12 +682,14 @@ void DivExportTIAZip::writeTrackDataTIAZip(int compressionLevel, int minSpanLeng
 
   // create compressed code sequence
   compressedCodeSequences.resize(e->song.subsong.size() * NUM_ZIP_CHANNELS);
-  spanSequences.resize(e->song.subsong.size() * NUM_ZIP_CHANNELS);
+  trackSequences.resize(e->song.subsong.size() * NUM_ZIP_CHANNELS);
+  trackPositionMaps.resize(e->song.subsong.size() * NUM_ZIP_CHANNELS);
   for (size_t subsong = 0; subsong < e->song.subsong.size(); subsong++) {
     for (int channel = 0; channel < NUM_ZIP_CHANNELS; channel += 1) {
       auto &codeSequence = codeSequences[subsong * NUM_ZIP_CHANNELS + channel];
       auto &compressedCodeSequence = compressedCodeSequences[subsong * NUM_ZIP_CHANNELS + channel];
-      auto &spanSequence = spanSequences[subsong * NUM_ZIP_CHANNELS + channel];
+      auto &trackSequence = trackSequences[subsong * NUM_ZIP_CHANNELS + channel];
+      auto &trackPositionMap = trackPositionMaps[subsong * NUM_ZIP_CHANNELS + channel];
 
       compressCodeSequence(
         subsong, 
@@ -688,7 +700,8 @@ void DivExportTIAZip::writeTrackDataTIAZip(int compressionLevel, int minSpanLeng
         branchWeight,
         codeSequence,
         compressedCodeSequence,
-        spanSequence
+        trackSequence,
+        trackPositionMap
       );
 
       validateCodeSequence(
@@ -696,13 +709,13 @@ void DivExportTIAZip::writeTrackDataTIAZip(int compressionLevel, int minSpanLeng
         channel,
         codeSequence,
         compressedCodeSequence,
-        spanSequence
+        trackSequence
       );
 
       // if (compressionLevel == 2) {
       //   auto &effectSequence = codeSequences[subsong][channel + 2];
       //   auto &compressedEffectSequence = compressedCodeSequences[subsong][channel + 2];
-      //   auto &spanEffectSequence = spanSequences[subsong][channel + 2];
+      //   auto &spanEffectSequence = trackSequences[subsong][channel + 2];
       //   compressCodeSequence(
       //     subsong, 
       //     channel,
@@ -723,7 +736,7 @@ void DivExportTIAZip::writeTrackDataTIAZip(int compressionLevel, int minSpanLeng
       //     compressedCodeSequence.emplace_back(n);
       //   }
       //   for (auto &n : spanEffectSequence) {
-      //     spanSequence.emplace_back(n);
+      //     trackSequence.emplace_back(n);
       //   }
       // }
 
@@ -762,7 +775,7 @@ void DivExportTIAZip::writeTrackDataTIAZip(int compressionLevel, int minSpanLeng
   //         totalData += 1;
   //       }
   //     } 
-  //     for (auto c : spanSequences[subsong * NUM_ZIP_CHANNELS + channel]) {
+  //     for (auto c : trackSequences[subsong * NUM_ZIP_CHANNELS + channel]) {
   //       trackFrequencies[c]++;
   //       totalTracks++;
   //       CODE_TYPE type = GET_CODE_TYPE(c);
@@ -807,10 +820,11 @@ void DivExportTIAZip::compressCodeSequence(
   size_t branchWeight,
   const std::vector<AlphaCode>&codeSequence,
   std::vector<AlphaCode> &compressedCodeSequence,
-  std::vector<AlphaCode> &spanSequence
+  std::vector<AlphaCode> &trackSequence,
+  std::map<size_t, size_t> &trackPositionMap
 ) {
 
-  spanSequence.reserve(codeSequence.size());
+  trackSequence.reserve(codeSequence.size());
   compressedCodeSequence.reserve(codeSequence.size());
 
   std::vector<AlphaChar> alphaSequence;
@@ -926,7 +940,7 @@ void DivExportTIAZip::compressCodeSequence(
           logD("writing stop @%d %d", i, end);
           // write stop
           compressedCodeSequence.emplace_back(CODE_BRANCH_POINT);
-          spanSequence.emplace_back(CODE_STOP);
+          trackSequence.emplace_back(CODE_STOP);
           break;
 
         } else {
@@ -939,25 +953,25 @@ void DivExportTIAZip::compressCodeSequence(
       }
       end++;
       assert (end < copyMap.size());
-      size_t nextCodeAddress = copyMap[end];
+      size_t nextCodeIndex = copyMap[end];
       auto& branchTable = branchFrequencyMap[leftmostCodeAddr];
-      if (nextCodeAddress == leftmostCodeAddr + 1 && branchTable.size() < 2) {
+      if (nextCodeIndex == leftmostCodeAddr + 1 && branchTable.size() < 2) {
         continue;
       }
-      size_t skipCodeAddress = skipMap[leftmostCodeAddr];
+      size_t skipCodeIndex = skipMap[leftmostCodeAddr];
       if (branchTable.size() < 2) {
         logD("force goto");
         totalGoto++;
       }
       if (!repeatSpan) {
         compressedCodeSequence.emplace_back(branchTable.size() < 2 ? CODE_TAKE_DATA_JUMP : CODE_BRANCH_POINT);
-        compressedCodeSequence.emplace_back(CODE_JUMP(subsong, channel, skipCodeAddress));
+        compressedCodeSequence.emplace_back(CODE_JUMP(subsong, channel, skipCodeIndex));
         for (auto &x: branchTable) {
           String mods = "";
-          if (x.first == skipCodeAddress) {
+          if (x.first == skipCodeIndex) {
             mods += "*";
           }
-          if (x.first == nextCodeAddress) {
+          if (x.first == nextCodeIndex) {
             mods += "<";
           }
           if (x.first == leftmostCodeAddr + 1) {
@@ -967,16 +981,16 @@ void DivExportTIAZip::compressCodeSequence(
         }
       }
       if (branchTable.size() > 1) {
-        if (nextCodeAddress == skipCodeAddress) {
-          spanSequence.emplace_back(CODE_TAKE_DATA_JUMP);
-          logD("%d|%d use goto %d from %d", end-1, leftmostCodeAddr, nextCodeAddress, labels[leftmostCodeAddr] + 1);
-        } else if (nextCodeAddress == leftmostCodeAddr + 1) {
-          spanSequence.emplace_back(CODE_SKIP);
+        if (nextCodeIndex == skipCodeIndex) {
+          trackSequence.emplace_back(CODE_TAKE_DATA_JUMP);
+          logD("%d|%d use goto %d from %d", end-1, leftmostCodeAddr, nextCodeIndex, labels[leftmostCodeAddr] + 1);
+        } else if (nextCodeIndex == leftmostCodeAddr + 1) {
+          trackSequence.emplace_back(CODE_SKIP);
           logD("%d|%d use skip", end-1, leftmostCodeAddr);
         } else {
-          spanSequence.emplace_back(CODE_TAKE_TRACK_JUMP);
-          spanSequence.emplace_back(CODE_JUMP(subsong, channel, nextCodeAddress));
-          logD("%d|%d use jump %d ", end-1, leftmostCodeAddr, nextCodeAddress);
+          trackSequence.emplace_back(CODE_TAKE_TRACK_JUMP);
+          trackSequence.emplace_back(CODE_JUMP(subsong, channel, nextCodeIndex));
+          logD("%d|%d use jump %d ", end-1, leftmostCodeAddr, nextCodeIndex);
         }
       }
     }
@@ -987,17 +1001,17 @@ void DivExportTIAZip::compressCodeSequence(
   for (size_t i = 0; i < compressedCodeSequence.size(); i++) {
     AlphaCode c = compressedCodeSequence[i];
     if (GET_CODE_TYPE(c) == CODE_TYPE::JUMP) {
-      size_t address = labels[GET_CODE_JUMP_ADDRESS(c)];
-      c = CODE_JUMP(subsong, channel, address);
+      size_t index = labels[GET_CODE_JUMP_INDEX(c)];
+      c = CODE_JUMP(subsong, channel, index);
       compressedCodeSequence[i] = c;
     }
   }
-  for (size_t i = 0; i < spanSequence.size(); i++) {
-    AlphaCode c = spanSequence[i];
+  for (size_t i = 0; i < trackSequence.size(); i++) {
+    AlphaCode c = trackSequence[i];
     if (GET_CODE_TYPE(c) == CODE_TYPE::JUMP) {
-      size_t address = labels[GET_CODE_JUMP_ADDRESS(c)];
-      c = CODE_JUMP(subsong, channel, address);
-      spanSequence[i] = c;
+      size_t index = labels[GET_CODE_JUMP_INDEX(c)];
+      c = CODE_JUMP(subsong, channel, index);
+      trackSequence[i] = c;
     } else if (GET_CODE_TYPE(c) == CODE_TYPE::WRITE_REGISTERS) {
       logD("bad code @%d", i);
       assert(false);
@@ -1005,76 +1019,77 @@ void DivExportTIAZip::compressCodeSequence(
   }
 
   // rewrite jumps as returns where possible
-  size_t maxOffset = 0;
-  size_t returnAddress = 0;
-  size_t nextReadAddress = 0;
-  size_t nextSpanAddress = 0;
+  size_t maxIndex= 0;
+  size_t returnIndex = 0;
+  size_t nextReadIndex = 0;
+  size_t nextSpanIndex = 0;
   while (true) {
-    assert(nextReadAddress < compressedCodeSequence.size());
-    AlphaCode c = compressedCodeSequence[nextReadAddress++];
+    assert(nextReadIndex < compressedCodeSequence.size());
+    AlphaCode c = compressedCodeSequence[nextReadIndex++];
     if (c == CODE_TAKE_DATA_JUMP) {
       // inline jump
-      c = compressedCodeSequence[nextReadAddress++];
-      size_t jumpAddress = GET_CODE_JUMP_ADDRESS(c);
-      returnAddress = nextReadAddress;
-      if (returnAddress >= maxOffset) {
-        maxOffset = returnAddress;
+      c = compressedCodeSequence[nextReadIndex++];
+      size_t jumpIndex = GET_CODE_JUMP_INDEX(c);
+      returnIndex = nextReadIndex;
+      if (returnIndex >= maxIndex) {
+        maxIndex = returnIndex;
       }
-      nextReadAddress = jumpAddress;
+      nextReadIndex = jumpIndex;
       continue;
 
     } else if (c != CODE_BRANCH_POINT) {
       continue;
     }
 
-    assert(nextSpanAddress < spanSequence.size());
-    AlphaCode s = spanSequence[nextSpanAddress++];
+    assert(nextSpanIndex < trackSequence.size());
+    AlphaCode s = trackSequence[nextSpanIndex++];
     if (s == CODE_STOP) {
       break;
 
     } else if (s == CODE_SKIP) {
-      nextReadAddress++;
+      nextReadIndex++;
 
     } else if (s == CODE_TAKE_DATA_JUMP) {
       // decisioned inline jump
-      c = compressedCodeSequence[nextReadAddress++];
-      size_t jumpAddress = GET_CODE_JUMP_ADDRESS(c);
-      returnAddress = nextReadAddress;
-      if (returnAddress >= maxOffset) {
-        maxOffset = returnAddress;
+      c = compressedCodeSequence[nextReadIndex++];
+      size_t returnIndex = GET_CODE_JUMP_INDEX(c);
+      returnIndex = nextReadIndex;
+      if (returnIndex >= maxIndex) {
+        maxIndex = returnIndex;
       }
-      nextReadAddress = jumpAddress;
+      nextReadIndex = returnIndex;
 
     } else  if (s == CODE_RETURN_FF) {
-        nextReadAddress = maxOffset;
-        nextSpanAddress++;
+        nextReadIndex = maxIndex;
+        nextSpanIndex++;
 
     } else if (s == CODE_RETURN_LAST) {
-        nextReadAddress = returnAddress;
-        nextSpanAddress++;
+        nextReadIndex = returnIndex;
+        nextSpanIndex++;
 
     } else if (s == CODE_TAKE_TRACK_JUMP) {
-      s = spanSequence[nextSpanAddress];
+      s = trackSequence[nextSpanIndex];
       assert(GET_CODE_TYPE(s) == CODE_TYPE::JUMP);
-      size_t jumpAddress = GET_CODE_JUMP_ADDRESS(s);
-      if (jumpAddress == returnAddress) {
-        spanSequence[nextSpanAddress-1] = CODE_RETURN_LAST;
-        spanSequence[nextSpanAddress] = CODE_RETURN_NOOP;
-        logD("rewriting to return last from %d to %d", nextReadAddress-1, jumpAddress);
+      size_t returnIndex = GET_CODE_JUMP_INDEX(s);
+      if (returnIndex == returnIndex) {
+        trackSequence[nextSpanIndex-1] = CODE_RETURN_LAST;
+        trackSequence[nextSpanIndex] = CODE_RETURN_NOOP;
+        logD("rewriting to return last from %d to %d", nextReadIndex-1, returnIndex);
 
-      } else if (jumpAddress == maxOffset) {
-        spanSequence[nextSpanAddress-1] = CODE_RETURN_FF;
-        spanSequence[nextSpanAddress] = CODE_RETURN_NOOP;
-        logD("rewriting to return front from %d to %d", nextReadAddress-1, jumpAddress);
+      } else if (returnIndex == maxIndex) {
+        trackSequence[nextSpanIndex-1] = CODE_RETURN_FF;
+        trackSequence[nextSpanIndex] = CODE_RETURN_NOOP;
+        logD("rewriting to return front from %d to %d", nextReadIndex-1, returnIndex);
 
       } else {
-        returnAddress = nextReadAddress + 1;
-        if (returnAddress >= maxOffset) {
-          maxOffset = returnAddress;
+        trackPositionMap[nextSpanIndex] = nextReadIndex;
+        returnIndex = nextReadIndex + 1;
+        if (returnIndex >= maxIndex) {
+          maxIndex = returnIndex;
         }
       }
-      nextReadAddress = jumpAddress;
-      nextSpanAddress++;
+      nextReadIndex = returnIndex;
+      nextSpanIndex++;
 
     } else {
       logD("bad code %08x", s);
@@ -1089,42 +1104,42 @@ void DivExportTIAZip::assembleBitstreams()
   for (size_t subsong = 0; subsong < e->song.subsong.size(); subsong++) {
     for (int channel = 0; channel < NUM_ZIP_CHANNELS; channel += 1) {
       auto &compressedCodeSequence = compressedCodeSequences[subsong * NUM_ZIP_CHANNELS + channel];
-      auto &spanSequence = spanSequences[subsong * NUM_ZIP_CHANNELS + channel];
+      auto &trackSequence = trackSequences[subsong * NUM_ZIP_CHANNELS + channel];
 
       // update code frequencies
       for (size_t i = 0; i < compressedCodeSequence.size(); i++) {
         AlphaCode c = compressedCodeSequence[i];
         CODE_TYPE type = GET_CODE_TYPE(c);
         if (c == CODE_BRANCH_POINT) {
-          abstractFrequencyMap[CODE_BRANCH_POINT]++;
+          dataCommandFrequencyMap[CODE_BRANCH_POINT]++;
 
         } else if (c == CODE_TAKE_DATA_JUMP) {
-          abstractFrequencyMap[CODE_TAKE_DATA_JUMP]++;
+          dataCommandFrequencyMap[CODE_TAKE_DATA_JUMP]++;
 
         } else if (type == CODE_TYPE::VOL_DEC) {
-          abstractFrequencyMap[CODE_VOL_DEC]++;
+          dataCommandFrequencyMap[CODE_VOL_DEC]++;
 
         } else if (type == CODE_TYPE::VOL_INC) {
-          abstractFrequencyMap[CODE_VOL_INC]++;
+          dataCommandFrequencyMap[CODE_VOL_INC]++;
 
         } else if (type == CODE_TYPE::PAUSE) {
-          abstractFrequencyMap[CODE_PAUSE_0]++;
+          dataCommandFrequencyMap[CODE_PAUSE_0]++;
           unsigned char duration = GET_CODE_WRITE_DURATION(c);
           durationFrequencyMap[(AlphaCode)duration]++;
 
         } else if (type == CODE_TYPE::SUSTAIN) {
-          abstractFrequencyMap[CODE_SUSTAIN_0]++;
+          dataCommandFrequencyMap[CODE_SUSTAIN_0]++;
           unsigned char duration = GET_CODE_WRITE_DURATION(c);
           durationFrequencyMap[(AlphaCode)duration]++;
 
         } else if (type == CODE_TYPE::VELOCITY) {
-          abstractFrequencyMap[CODE_VELOCITY_0]++;
+          dataCommandFrequencyMap[CODE_VELOCITY_0]++;
           unsigned char velocity = GET_CODE_VELOCITY(c);
           velocityFrequencyMap[(AlphaCode)velocity]++;          
 
         } else if (type == CODE_TYPE::WRITE_REGISTERS) {
           AlphaCode ac = GET_CODE_WRITE_REGISTERS_MASKED(c); 
-          abstractFrequencyMap[ac]++;
+          dataCommandFrequencyMap[ac]++;
           CHANGE_STATE cc = GET_CODE_WRITE_CC(c);
           if (cc == CHANGE_STATE::CHANGE) {
             unsigned char cx = GET_CODE_WRITE_CX(c);
@@ -1153,13 +1168,13 @@ void DivExportTIAZip::assembleBitstreams()
       }
 
       // update jump frequencies
-      for (size_t j = 0; j < spanSequence.size(); j++) {
-        AlphaCode spanCode = spanSequence[j];
-        CODE_TYPE type = GET_CODE_TYPE(spanCode);
+      for (size_t j = 0; j < trackSequence.size(); j++) {
+        AlphaCode trackCommandCode = trackSequence[j];
+        CODE_TYPE type = GET_CODE_TYPE(trackCommandCode);
         if (type == CODE_TYPE::JUMP) {
-          jumpFrequencyMap[spanCode]++;
+          jumpFrequencyMap[trackCommandCode]++;
         } else if (type != CODE_TYPE::RETURN_NOOP) {
-          spanFrequencyMap[spanCode]++;
+          trackCommandFrequencyMap[trackCommandCode]++;
         }
       }
     }
@@ -1207,23 +1222,23 @@ void DivExportTIAZip::assembleBitstreams()
 
 
   logD("code tree");
-  logD("abstract dictionary size: %d", abstractFrequencyMap.size());
-  SHOW_FREQUENCIES(abstractFrequencyMap);
-  abstractCodeTree = buildHuffmanTree(abstractFrequencyMap, maxHuffmanCodes, minWeight, maxBits, CODE_WRITE_REGISTERS_000, abstractCodebook);
-  abstractCodeTree->buildIndex(abstractCodeIndex);
-  SHOW_TREE(abstractFrequencyMap, abstractCodeIndex, 3, CODE_WRITE_REGISTERS_000);
+  logD("data stream command dictionary size: %d", dataCommandFrequencyMap.size());
+  SHOW_FREQUENCIES(dataCommandFrequencyMap);
+  dataCommandCodeTree = buildHuffmanTree(dataCommandFrequencyMap, maxHuffmanCodes, minWeight, maxBits, CODE_WRITE_REGISTERS_000, dataCommandCodebook);
+  dataCommandCodeTree->buildIndex(dataCommandCodes);
+  SHOW_TREE(dataCommandFrequencyMap, dataCommandCodes, 3, CODE_WRITE_REGISTERS_000);
 
   logD("span tree");
-  logD("span dictionary size: %d", spanFrequencyMap.size());
-  SHOW_FREQUENCIES(spanFrequencyMap);
-  spanTree = buildHuffmanTree(spanFrequencyMap, maxHuffmanCodes, minWeight, maxBits, 0, spanCodebook);
-  spanTree->buildIndex(spanCodeIndex);
-  SHOW_TREE(spanFrequencyMap, spanCodeIndex, 3, 0);
+  logD("span dictionary size: %d", trackCommandFrequencyMap.size());
+  SHOW_FREQUENCIES(trackCommandFrequencyMap);
+  trackCommandTree = buildHuffmanTree(trackCommandFrequencyMap, maxHuffmanCodes, minWeight, maxBits, 0, trackCommandCodebook);
+  trackCommandTree->buildIndex(trackCommandCodes);
+  SHOW_TREE(trackCommandFrequencyMap, trackCommandCodes, 3, 0);
 
   logD("control tree");
   controlTree = buildHuffmanTree(controlFrequencyMap, maxHuffmanCodes, minWeight, maxBits, 0, controlCodebook);
-  controlTree->buildIndex(controlCodeIndex);
-  SHOW_TREE(controlFrequencyMap, controlCodeIndex, 4, 0);
+  controlTree->buildIndex(controlCodes);
+  SHOW_TREE(controlFrequencyMap, controlCodes, 4, 0);
 
   // merge frequencies  
   logD("merging frequency trees");
@@ -1288,26 +1303,26 @@ void DivExportTIAZip::assembleBitstreams()
   for (auto &x: mergedFrequencyMap) {
     logD("merged frequency tree %d", x.first);
     mergedFrequencyTrees[x.first] = buildHuffmanTree(x.second, maxHuffmanCodes, minWeight, maxBits, 0, mergedFrequencyCodebooks[x.first]);
-    mergedFrequencyTrees[x.first]->buildIndex(mergedFrequencyCodeIndexes[x.first]);
-    SHOW_TREE(x.second, mergedFrequencyCodeIndexes[x.first], 9, 0);
+    mergedFrequencyTrees[x.first]->buildIndex(mergedFrequencyCodes[x.first]);
+    SHOW_TREE(x.second, mergedFrequencyCodes[x.first], 9, 0);
   }
 
   logD("volume tree");
   volumeTree = buildHuffmanTree(volumeFrequencyMap, maxHuffmanCodes, minWeight, maxBits, 0, volumeCodebook);
-  volumeTree->buildIndex(volumeCodeIndex);
-  SHOW_TREE(volumeFrequencyMap, volumeCodeIndex, 4, 0);
+  volumeTree->buildIndex(volumeCodes);
+  SHOW_TREE(volumeFrequencyMap, volumeCodes, 4, 0);
 
   logD("duration tree");
   durationTree = buildHuffmanTree(durationFrequencyMap, maxHuffmanCodes, minWeight, maxBits, 0, durationCodebook);
-  durationTree->buildIndex(durationCodeIndex);
-  SHOW_TREE(durationFrequencyMap, durationCodeIndex, 4, 0);
+  durationTree->buildIndex(durationCodes);
+  SHOW_TREE(durationFrequencyMap, durationCodes, 4, 0);
 
   logD("velocity tree");
   velocityTree = buildHuffmanTree(velocityFrequencyMap, maxHuffmanCodes, minWeight, maxBits, 0, velocityCodebook);
   if (NULL != velocityTree) {
-    velocityTree->buildIndex(velocityCodeIndex);
+    velocityTree->buildIndex(velocityCodes);
   }
-  SHOW_TREE(velocityFrequencyMap, velocityCodeIndex, 4, 0);
+  SHOW_TREE(velocityFrequencyMap, velocityCodes, 4, 0);
 
   // assemble bitstreams
   size_t streamDataOffset = (baseDataOffset << 3);
@@ -1320,82 +1335,130 @@ void DivExportTIAZip::assembleBitstreams()
       // produce data stream
       logD("encoding data stream for %d %d", subsong, channel);
       auto &compressedCodeSequence = compressedCodeSequences[subsong * NUM_ZIP_CHANNELS + channel];
-
+      auto &trackPositionMap = trackPositionMaps[subsong * NUM_ZIP_CHANNELS + channel];
+    
+      // initial jump assignments
       std::vector<JUMP_POINTER_TYPE> jumpTypeAssignments;
       jumpTypeAssignments.resize(compressedCodeSequence.size());
-      for (size_t i; i < compressedCodeSequence.size(); i++) {
+      for (size_t i = 0; i < compressedCodeSequence.size(); i++) {
         AlphaCode code = compressedCodeSequence.at(i);
         if (GET_CODE_TYPE(code) != CODE_TYPE::JUMP) {
           continue;
         }
-        size_t address = GET_CODE_JUMP_ADDRESS(code);
-        JUMP_POINTER_TYPE jumpType = jumpMap.find(address) != jumpMap.end() ?
-           JUMP_POINTER_TYPE::INDEX : JUMP_POINTER_TYPE::LONG;
+        JUMP_POINTER_TYPE jumpType = branchPointerOptimization ?
+          JUMP_POINTER_TYPE::SHORT : JUMP_POINTER_TYPE::LONG;
+        if (jumpMap.find(code) != jumpMap.end()) {
+          jumpType = JUMP_POINTER_TYPE::INDEX;
+        }
+        logD("JUMP INIT %d = %d", i, (int)jumpType);
         jumpTypeAssignments[i] = jumpType;    
       }
 
       std::vector<size_t> positionMap;
-      Bitstream *dataStream = 
-        assembleDatastream(
+      Bitstream *dataStream = NULL;
+      while (dataStream == NULL) {
+        std::vector<size_t> tooBigJumps;
+        dataStream = assembleDatastream(
           compressedCodeSequence,
           jumpTypeAssignments,
           jumpMap,
           streamDataOffset,
-          positionMap
+          positionMap,
+          tooBigJumps
         );
+        if (tooBigJumps.size() > 0) {
+          logD("found %d too big jumps, will try again", tooBigJumps.size());
+          delete dataStream;
+          dataStream = NULL;
+          for (auto x : tooBigJumps) {
+            logD("replacing jump at %d", x);
+            jumpTypeAssignments[x] = JUMP_POINTER_TYPE::LONG;
+          }
+        }
+      }
+        
       dataStreams[subsong * NUM_ZIP_CHANNELS + channel] = dataStream;
 
       // produce track stream
       logD("encoding track stream for %d %d", subsong, channel);
-      auto &spanSequence = spanSequences[subsong * NUM_ZIP_CHANNELS + channel];
-      std::map<size_t, size_t> trackStreamPointerValueMap;
+      auto &trackSequence = trackSequences[subsong * NUM_ZIP_CHANNELS + channel];
       Bitstream *trackStream = new Bitstream(blockSize);
       trackStreams[subsong * NUM_ZIP_CHANNELS + channel] = trackStream;
-      for (size_t i = 0; i < spanSequence.size(); i++) {
-        AlphaCode s = spanSequence[i];
+      for (size_t i = 0; i < trackSequence.size(); i++) {
+        AlphaCode s = trackSequence[i];
         CODE_TYPE type = GET_CODE_TYPE(s);
         size_t startPosition = trackStream->position();
+
         if (s == CODE_STOP) {
-          logD("SPAN %d %d %08x - STOP", subsong, channel, BITSTREAM_ADDR(trackStream->position()));
-          trackStream->writeBits(spanCodeIndex.at(CODE_STOP));
+          logD("SPAN %d %d %08x - STOP", subsong, channel, GET_ADDRESS_COMPONENTS(trackStream->position()));
+          trackStream->writeBits(trackCommandCodes.at(CODE_STOP));
 
         } else if (s == CODE_RETURN_LAST) {
-          logD("SPAN %d %d %08x - RETURN_LAST", subsong, channel, BITSTREAM_ADDR(trackStream->position()));
-          trackStream->writeBits(spanCodeIndex.at(CODE_RETURN_LAST));          
+          logD("SPAN %d %d %08x - RETURN_LAST", subsong, channel, GET_ADDRESS_COMPONENTS(trackStream->position()));
+          trackStream->writeBits(trackCommandCodes.at(CODE_RETURN_LAST));          
 
         } else if (s == CODE_RETURN_FF) {
-          logD("SPAN %d %d %08x - RETURN_FF", subsong, channel, BITSTREAM_ADDR(trackStream->position()));
-          trackStream->writeBits(spanCodeIndex.at(CODE_RETURN_FF));
+          logD("SPAN %d %d %08x - RETURN_FF", subsong, channel, GET_ADDRESS_COMPONENTS(trackStream->position()));
+          trackStream->writeBits(trackCommandCodes.at(CODE_RETURN_FF));
         
         } else if (s == CODE_RETURN_NOOP) {
           // pass
 
         } else if (s == CODE_SKIP) {
-          logD("SPAN %d %d %08x - SKIP", subsong, channel, BITSTREAM_ADDR(trackStream->position()));
-          trackStream->writeBits(spanCodeIndex.at(CODE_SKIP));
+          logD("SPAN %d %d %08x - SKIP(%d)", subsong, channel, GET_ADDRESS_COMPONENTS(trackStream->position()), i);
+          trackStream->writeBits(trackCommandCodes.at(CODE_SKIP));
 
         } else if (s == CODE_TAKE_DATA_JUMP) {
-          logD("SPAN %d %d %08x - DATA_JUMP", subsong, channel, BITSTREAM_ADDR(trackStream->position()));
-          trackStream->writeBits(spanCodeIndex.at(CODE_TAKE_DATA_JUMP));
+          logD("SPAN %d %d %08x - DATA_JUMP(%d)", subsong, channel, GET_ADDRESS_COMPONENTS(trackStream->position()), i);
+          trackStream->writeBits(trackCommandCodes.at(CODE_TAKE_DATA_JUMP));
 
         } else if (s == CODE_TAKE_TRACK_JUMP) {
-          logD("SPAN %d %d %08x - TRACK_JUMP", subsong, channel, BITSTREAM_ADDR(trackStream->position()));
-          trackStream->writeBits(spanCodeIndex.at(CODE_TAKE_TRACK_JUMP));
+          logD("SPAN %d %d %08x - TRACK_JUMP(%d)", subsong, channel, GET_ADDRESS_COMPONENTS(trackStream->position()), i);
+          trackStream->writeBits(trackCommandCodes.at(CODE_TAKE_TRACK_JUMP));
           i++;
-          s = spanSequence[i];
+          s = trackSequence[i];
+
           auto ij = jumpMap.find(s);
           if (ij != jumpMap.end()) {
             size_t index = (*ij).second;
-            logD("SPAN %d %d %08x - JUMP TABLE %08x", subsong, channel, BITSTREAM_ADDR(trackStream->position()), index);
+            logD("SPAN %d %d %08x - JUMP INDEX %08x", subsong, channel, GET_ADDRESS_COMPONENTS(trackStream->position()), index);
             trackStream->writeBit(false); // is lookup
             trackStream->writeBits(index, addressIndexBits);
 
+          } else if (branchPointerOptimization) {
+            // figure out short versus long jump bytes
+            size_t address = GET_CODE_JUMP_INDEX(s);
+            size_t targetAddress = BITSTREAM_2_ADDRESS(positionMap.at(address));
+            size_t sourceAddress = BITSTREAM_2_ADDRESS(positionMap.at(trackPositionMap.at(i)+1));
+            
+            size_t targetAddressBytes = targetAddress >> 3;
+            size_t sourceAddressBytes = sourceAddress >> 3;
+            bool jumpForward = targetAddressBytes > sourceAddressBytes;
+            size_t distanceBytes = jumpForward ? (targetAddressBytes - sourceAddressBytes) : (sourceAddressBytes - targetAddressBytes);
+            if (distanceBytes <= 127) {
+              // short jump
+              logD("SPAN %d %d %08x - JUMP SHORT %08x (%d)", subsong, channel, GET_ADDRESS_COMPONENTS(trackStream->position()), targetAddress, distanceBytes);
+              size_t shiftAddr = targetAddress & 0x07;
+              size_t shortJump = (((jumpForward ? 0x00 : 0x80) | distanceBytes) << 3) | shiftAddr;
+              trackStream->writeBit(true); // no lookup
+              trackStream->writeBit(false); // short
+              dataStream->writeBits(shortJump, 11);
+
+            } else {
+              // long jump
+              logD("SPAN %d %d %08x - JUMP LONG %08x", subsong, channel, GET_ADDRESS_COMPONENTS(trackStream->position()), targetAddress);
+              trackStream->writeBit(true); // no lookup
+              trackStream->writeBit(true); // long
+              trackStream->writeBits(targetAddress, addressBits);
+
+            }
+
           } else {
-            size_t address = GET_CODE_JUMP_ADDRESS(s);
-            logD("SPAN %d %d %08x - JUMP ADDRESS %08x", subsong, channel, BITSTREAM_ADDR(trackStream->position()), address);
+            size_t address = GET_CODE_JUMP_INDEX(s);
+            size_t targetAddress = BITSTREAM_2_ADDRESS(positionMap[address]);
+            logD("SPAN %d %d %08x - JUMP LONG %08x", subsong, channel, GET_ADDRESS_COMPONENTS(trackStream->position()), address);
             trackStream->writeBit(true); // no lookup
-            trackStreamPointerValueMap[trackStream->position()] = address;
-            trackStream->writeBits(address, addressBits);
+            trackStream->writeBits(targetAddress, addressBits);
 
           }
         } else {
@@ -1406,17 +1469,7 @@ void DivExportTIAZip::assembleBitstreams()
 
       }
 
-      for (auto& x : trackStreamPointerValueMap) {
-        trackStream->seek(x.first);
-        size_t address = positionMap[x.second];
-        trackStream->writeBits(address, addressBits);
-        long bits = msb(address);
-        bool jumpForward = address > x.first;
-        size_t distanceBytes = (jumpForward ? address - x.first : x.first - address) >> 3;
-        unsigned long distanceBits = msb(distanceBytes) + 4;
-        logD("TRACK %d %d - REMAP JUMP ADDRESS@%08x: %08x -> %08x (%d bits) (distance %d/%d is %d bits)", subsong, channel, BITSTREAM_ADDR(x.first), x.second, BITSTREAM_ADDR(address), bits, distanceBytes, jumpForward, distanceBits);
-      }
-
+      // build jump addresses
       for (auto& x : jumpMap) {
         if (subsong != GET_CODE_SUBSONG(x.first)) {
           continue;
@@ -1424,8 +1477,8 @@ void DivExportTIAZip::assembleBitstreams()
         if (channel != GET_CODE_CHANNEL(x.first)) {
           continue;
         }
-        size_t address = GET_CODE_JUMP_ADDRESS(x.first);
-        jumpTableAddresses[x.second] = positionMap[address];
+        size_t jumpIndex = GET_CODE_JUMP_INDEX(x.first);
+        jumpTableAddresses[x.second] = BITSTREAM_2_ADDRESS(positionMap[jumpIndex]);
       }
 
       streamDataOffset += (dataStream->bytesUsed() << 3);
@@ -1447,12 +1500,14 @@ Bitstream * DivExportTIAZip::assembleDatastream(
   const std::vector<JUMP_POINTER_TYPE> &jumpTypeAssignments,
   const std::map<AlphaCode, size_t> &jumpMap,
   const size_t streamDataOffset,
-  std::vector<size_t> &positionMap
+  std::vector<size_t> &positionMap,
+  std::vector<size_t> &tooBigJumps
 )
 {
   Bitstream *dataStream = new Bitstream(blockSize);
 
-  std::map<size_t, size_t> jumpRevisionMap;
+  // map from data stream position to sequence position and target address
+  std::map<size_t, std::pair<size_t, size_t>> jumpRevisionMap;
   positionMap.resize(compressedCodeSequence.size());
   for (size_t i = 0; i < compressedCodeSequence.size(); i++) {
     AlphaCode c = compressedCodeSequence[i];
@@ -1462,108 +1517,120 @@ Bitstream * DivExportTIAZip::assembleDatastream(
     CODE_TYPE type = GET_CODE_TYPE(c);
     switch (type) {
       case CODE_TYPE::BRANCH_POINT: {
-        logD("DATA %08x - BRANCH_POINT", BITSTREAM_ADDR(dataStream->position()));
-        dataStream->writeBits(abstractCodeIndex.at(CODE_BRANCH_POINT));
+        logD("DATA %d@%08x - BRANCH_POINT", i, GET_ADDRESS_COMPONENTS(dataStream->position()));
+        dataStream->writeBits(dataCommandCodes.at(CODE_BRANCH_POINT));
         break;
       }
 
       case CODE_TYPE::TAKE_DATA_JUMP: {
-        logD("DATA %08x - TAKE_DATA_JUMP", BITSTREAM_ADDR(dataStream->position()));
-        dataStream->writeBits(abstractCodeIndex.at(CODE_TAKE_DATA_JUMP));
+        logD("DATA %d@%08x - TAKE_DATA_JUMP", i, GET_ADDRESS_COMPONENTS(dataStream->position()));
+        dataStream->writeBits(dataCommandCodes.at(CODE_TAKE_DATA_JUMP));
         break;
       }
 
       case CODE_TYPE::WRITE_REGISTERS: {
         AlphaCode ac = GET_CODE_WRITE_REGISTERS_MASKED(c); 
-        logD("DATA %08x - WRITE_REGISTERS", BITSTREAM_ADDR(dataStream->position()));
-        dataStream->writeBits(abstractCodeIndex.at(ac));
+        logD("DATA %d@%08x - WRITE_REGISTERS",i,  GET_ADDRESS_COMPONENTS(dataStream->position()));
+        dataStream->writeBits(dataCommandCodes.at(ac));
         CHANGE_STATE cc = GET_CODE_WRITE_CC(c);
         if (cc == CHANGE_STATE::CHANGE) {
           unsigned char cx = GET_CODE_WRITE_CX(c);
-          logD("DATA %08x - CX %d", BITSTREAM_ADDR(dataStream->position()), cx);
-          dataStream->writeBits(controlCodeIndex.at(cx));
+          logD("DATA %d@%08x - CX %d", i, GET_ADDRESS_COMPONENTS(dataStream->position()), cx);
+          dataStream->writeBits(controlCodes.at(cx));
         }
         CHANGE_STATE fc = GET_CODE_WRITE_FC(c);
         if (fc == CHANGE_STATE::CHANGE) {
           unsigned char fx = GET_CODE_WRITE_FX(c);
           unsigned char cx = GET_CODE_WRITE_CX(c);
-          logD("DATA %08x - FX %d", BITSTREAM_ADDR(dataStream->position()), fx);
-          // dataStream->writeBits(frequencyCodeIndex.at(fx));
+          logD("DATA %d@%08x - FX %d", i, GET_ADDRESS_COMPONENTS(dataStream->position()), fx);
+          // dataStream->writeBits(frequencyCodes.at(fx));
           AlphaCode mfc = controlCodeMergeMap.at(cx);
-          dataStream->writeBits(mergedFrequencyCodeIndexes[mfc].at(fx));
+          dataStream->writeBits(mergedFrequencyCodes[mfc].at(fx));
         }
         CHANGE_STATE vc = GET_CODE_WRITE_VC(c);
         if (vc == CHANGE_STATE::CHANGE) {
           unsigned char vx = GET_CODE_WRITE_VX(c);
-          logD("DATA %08x - VX %d", BITSTREAM_ADDR(dataStream->position()), vx);
-          dataStream->writeBits(volumeCodeIndex.at(vx));
+          logD("DATA %d@%08x - VX %d", i, GET_ADDRESS_COMPONENTS(dataStream->position()), vx);
+          dataStream->writeBits(volumeCodes.at(vx));
         }
         // duration always 1
         // unsigned char duration = GET_CODE_WRITE_DURATION(c);
-        // dataStream->writeBits(durationCodeIndex.at(duration));
+        // dataStream->writeBits(durationCodes.at(duration));
         break;
       }
 
       case CODE_TYPE::VOL_INC: {
-        logD("DATA %08x - VOL_INC", BITSTREAM_ADDR(dataStream->position()));
-        dataStream->writeBits(abstractCodeIndex.at(CODE_VOL_INC));
+        logD("DATA %d@%08x - VOL_INC", i, GET_ADDRESS_COMPONENTS(dataStream->position()));
+        dataStream->writeBits(dataCommandCodes.at(CODE_VOL_INC));
         break;
       }
 
       case CODE_TYPE::VOL_DEC: {
-        logD("DATA %08x - VOL_DEC", BITSTREAM_ADDR(dataStream->position()));
-        dataStream->writeBits(abstractCodeIndex.at(CODE_VOL_DEC));
+        logD("DATA %d@%08x - VOL_DEC", i, GET_ADDRESS_COMPONENTS(dataStream->position()));
+        dataStream->writeBits(dataCommandCodes.at(CODE_VOL_DEC));
         break;
       }
 
       case CODE_TYPE::PAUSE: {
         unsigned char duration = GET_CODE_WRITE_DURATION(c);
-        logD("DATA %08x - PAUSE %d", BITSTREAM_ADDR(dataStream->position()), duration);
-        dataStream->writeBits(abstractCodeIndex.at(CODE_PAUSE_0));
-        dataStream->writeBits(durationCodeIndex.at(duration));
+        logD("DATA %d@%08x - PAUSE %d", i, GET_ADDRESS_COMPONENTS(dataStream->position()), duration);
+        dataStream->writeBits(dataCommandCodes.at(CODE_PAUSE_0));
+        dataStream->writeBits(durationCodes.at(duration));
         break;
       }
 
       case CODE_TYPE::SUSTAIN: {
         unsigned char duration = GET_CODE_WRITE_DURATION(c);
-        logD("DATA %08x - SUSTAIN %d", BITSTREAM_ADDR(dataStream->position()), duration);
-        dataStream->writeBits(abstractCodeIndex.at(CODE_SUSTAIN_0));
-        dataStream->writeBits(durationCodeIndex.at(duration));
+        logD("DATA %d@%08x - SUSTAIN %d", i, GET_ADDRESS_COMPONENTS(dataStream->position()), duration);
+        dataStream->writeBits(dataCommandCodes.at(CODE_SUSTAIN_0));
+        dataStream->writeBits(durationCodes.at(duration));
         break;
       }
 
       case CODE_TYPE::VELOCITY: {
         unsigned char velocity = GET_CODE_VELOCITY(c);
-        logD("DATA %08x - VELOCITY %d", BITSTREAM_ADDR(dataStream->position()), velocity);
-        assert(abstractCodeIndex.find(CODE_VELOCITY_0) != abstractCodeIndex.end());
-        assert(velocityCodeIndex.find(velocity) != velocityCodeIndex.end());
-        dataStream->writeBits(abstractCodeIndex.at(CODE_VELOCITY_0));
-        dataStream->writeBits(velocityCodeIndex.at(velocity));
+        logD("DATA %d@%08x - VELOCITY %d", i, GET_ADDRESS_COMPONENTS(dataStream->position()), velocity);
+        assert(dataCommandCodes.find(CODE_VELOCITY_0) != dataCommandCodes.end());
+        assert(velocityCodes.find(velocity) != velocityCodes.end());
+        dataStream->writeBits(dataCommandCodes.at(CODE_VELOCITY_0));
+        dataStream->writeBits(velocityCodes.at(velocity));
         break;
       }
 
       case CODE_TYPE::JUMP: {
-        switch (jumpTypeAssignments[i]) {
+
+        JUMP_POINTER_TYPE jumpType = jumpTypeAssignments[i];
+        switch (jumpType) {
 
           case JUMP_POINTER_TYPE::INDEX: {
             size_t index = jumpMap.at(c);
-            logD("DATA %08x - JUMP TABLE %d", BITSTREAM_ADDR(dataStream->position()), index);
+            logD("DATA %d@%08x - JUMP INDEX %d", i, GET_ADDRESS_COMPONENTS(dataStream->position()), index);
             dataStream->writeBit(false); // is lookup
             dataStream->writeBits(index, addressIndexBits);
             break;
           }
 
           case JUMP_POINTER_TYPE::LONG: {
-            size_t address = GET_CODE_JUMP_ADDRESS(c);
-            logD("DATA %08x - JUMP ADDRESS %08x", BITSTREAM_ADDR(dataStream->position()), address);
+            size_t targetAddress = BITSTREAM_2_ADDRESS(GET_CODE_JUMP_INDEX(c));
+            logD("DATA %d@%08x - JUMP LONG %08x", i, GET_ADDRESS_COMPONENTS(dataStream->position()), targetAddress);
             dataStream->writeBit(true); // no lookup
-            jumpRevisionMap[dataStream->position()] = address;
-            dataStream->writeBits(address, addressBits);
+            if (branchPointerOptimization) {
+              dataStream->writeBit(true); // long pointer
+            }
+            jumpRevisionMap[dataStream->position()] = std::pair<size_t, size_t>(i, targetAddress);
+            dataStream->writeBits(targetAddress, addressBits);
             break;
           }
 
-          case JUMP_POINTER_TYPE::SHORT:
-            assert(false); // not implemented
+          case JUMP_POINTER_TYPE::SHORT: {
+            size_t targetIndex = GET_CODE_JUMP_INDEX(c);
+            logD("DATA %d@%08x - JUMP SHORT %08x", i, GET_ADDRESS_COMPONENTS(dataStream->position()), targetIndex);
+            dataStream->writeBit(true); // no lookup
+            dataStream->writeBit(false); // short
+            jumpRevisionMap[dataStream->position()] = std::pair<size_t, size_t>(i, targetIndex);
+            dataStream->writeBits(targetIndex, 11);
+            break;
+          }
 
         } 
         break;
@@ -1573,17 +1640,43 @@ Bitstream * DivExportTIAZip::assembleDatastream(
         logD("bad code %08x", c);
         assert(false);
     }
+
   }
 
   for (auto& x : jumpRevisionMap) {
     dataStream->seek(x.first);
-    size_t address = positionMap[x.second];
-    dataStream->writeBits(address, addressBits);
-    unsigned long bits = msb(address);
-    bool jumpForward = address > x.first;
-    size_t distanceBytes = (jumpForward ? address - x.first : x.first - address) >> 3;
-    unsigned long distanceBits = msb(distanceBytes) + 4;
-    logD("DATA - REMAP JUMP ADDRESS@%08x: %08x -> %08x (%08x is %d bits) (distance %d/%d is %d bits)", BITSTREAM_ADDR(x.first), x.second, BITSTREAM_ADDR(address), address, bits, distanceBytes, jumpForward, distanceBits);
+    JUMP_POINTER_TYPE jumpType = jumpTypeAssignments[x.second.first];
+    size_t targetAddress = BITSTREAM_2_ADDRESS(positionMap[x.second.second]);
+    switch (jumpType) {
+      case JUMP_POINTER_TYPE::LONG: {
+        dataStream->writeBits(targetAddress, addressBits);
+        unsigned long bits = msb(targetAddress);
+        logD("DATA - REMAP JUMP ADDRESS@%08x: %08x -> %08x (%08x is %d bits)", GET_ADDRESS_COMPONENTS(x.first), x.second.second, GET_ADDRESS_COMPONENTS(targetAddress), targetAddress, bits);
+        break;
+      }
+
+      case JUMP_POINTER_TYPE::SHORT: {
+        size_t targetAddressBytes = targetAddress >> 3;
+        size_t sourceAddress = BITSTREAM_2_ADDRESS(x.first + 11 + streamDataOffset);
+        size_t sourceAddressBytes = sourceAddress >> 3;
+        bool jumpForward = targetAddressBytes > sourceAddressBytes;
+        size_t shiftAddr = targetAddress & 0x07;
+
+        size_t distanceBytes = jumpForward ? (targetAddressBytes - sourceAddressBytes) : (sourceAddressBytes - targetAddressBytes);
+        if (distanceBytes > 127) {
+          tooBigJumps.push_back(x.second.first);
+        }
+        size_t shortJump = (((jumpForward ? 0x00 : 0x80) | distanceBytes) << 3) | shiftAddr;
+        dataStream->writeBits(shortJump, 11);
+        logD("DATA - REMAP JUMP RELATIVE@%08x: %08x -> %08x -> %08x (%08x is %d bits) (distance %d is %d bits)", GET_ADDRESS_COMPONENTS(x.first), GET_ADDRESS_COMPONENTS(sourceAddress), shortJump, GET_ADDRESS_COMPONENTS(targetAddress), targetAddress, msb(targetAddress), distanceBytes, msb(distanceBytes));
+        break;
+
+      }
+
+      default:
+        assert(false);
+    }
+
   }
 
   return dataStream;
@@ -1605,7 +1698,11 @@ void DivExportTIAZip::writeBitstreams() {
 
   trackData->writeText(fmt::sprintf("\nAUDIO_NUM_TRACKS = %d\n", numSongs));
 
-  trackData->writeText("\n#include \"cores/tiazip_2_player_core.asm\"\n");
+  if (branchPointerOptimization) {
+    trackData->writeText("\n#include \"cores/tiazip_2_player_core.asm\"\n");
+  } else {
+    trackData->writeText("\n#include \"cores/tiazip_1_player_core.asm\"\n");
+  }
 
   // create a lookup table for use in player apps
   size_t songDataSize = 0;
@@ -1689,28 +1786,28 @@ void DivExportTIAZip::writeBitstreams() {
   totalCompressedBytes += writeCodebookFirstValues(
     trackData, 
     "audio_decode_command",
-    abstractCodebook,
-    abstractCodeIndex
+    dataCommandCodebook,
+    dataCommandCodes
   );
   totalCompressedBytes += writeCodebookFirstValues(
     trackData,
     "audio_decode_span",
-    spanCodebook,
-    spanCodeIndex
+    trackCommandCodebook,
+    trackCommandCodes
   );
-  totalCompressedBytes += writeCodebookFirstValues(trackData, "audio_decode_control", controlCodebook, controlCodeIndex);
+  totalCompressedBytes += writeCodebookFirstValues(trackData, "audio_decode_control", controlCodebook, controlCodes);
   // totalCompressedBytes += writeCodebookFirstValues(trackData, "audio_decode_frequency", frequencyCodebook, frequencyCodeIndex);
   for (auto &x : mergedFrequencyCodebooks) {
     totalCompressedBytes += writeCodebookFirstValues(
       trackData,
       fmt::sprintf("audio_decode_control_%d_frequency", x.first).c_str(),
       x.second,
-      mergedFrequencyCodeIndexes[x.first]
+      mergedFrequencyCodes[x.first]
     );
   }
-  totalCompressedBytes += writeCodebookFirstValues(trackData, "audio_decode_volume", volumeCodebook, volumeCodeIndex);
-  totalCompressedBytes += writeCodebookFirstValues(trackData, "audio_decode_duration", durationCodebook, durationCodeIndex);
-  totalCompressedBytes += writeCodebookFirstValues(trackData, "audio_decode_velocity", velocityCodebook, velocityCodeIndex);
+  totalCompressedBytes += writeCodebookFirstValues(trackData, "audio_decode_volume", volumeCodebook, volumeCodes);
+  totalCompressedBytes += writeCodebookFirstValues(trackData, "audio_decode_duration", durationCodebook, durationCodes);
+  totalCompressedBytes += writeCodebookFirstValues(trackData, "audio_decode_velocity", velocityCodebook, velocityCodes);
 
   // BUGBUG: disable
   // // write control and decoder tables
@@ -1718,28 +1815,28 @@ void DivExportTIAZip::writeBitstreams() {
   // totalCompressedBytes += writeCodebookLastValues(
   //   trackData, 
   //   "audio_decode_command",
-  //   abstractCodebook,
-  //   abstractCodeIndex
+  //   dataCommandCodebook,
+  //   dataCommandCodes
   // );
   // totalCompressedBytes += writeCodebookLastValues(
   //   trackData,
   //   "audio_decode_span",
-  //   spanCodebook,
-  //   spanCodeIndex
+  //   trackCommandCodebook,
+  //   trackCommandCodes
   // );
-  // totalCompressedBytes += writeCodebookLastValues(trackData, "audio_decode_control", controlCodebook, controlCodeIndex);
+  // totalCompressedBytes += writeCodebookLastValues(trackData, "audio_decode_control", controlCodebook, controlCodes);
   // // totalCompressedBytes += writeCodebookLastValues(trackData, "audio_decode_frequency", frequencyCodebook, frequencyCodeIndex);
   // for (auto &x : mergedFrequencyCodebooks) {
   //   totalCompressedBytes += writeCodebookLastValues(
   //     trackData,
   //     fmt::sprintf("audio_decode_control_%d_frequency", x.first).c_str(),
   //     x.second,
-  //     mergedFrequencyCodeIndexes[x.first]
+  //     mergedFrequencyCodes[x.first]
   //   );
   // }
-  // totalCompressedBytes += writeCodebookLastValues(trackData, "audio_decode_volume", volumeCodebook, volumeCodeIndex);
-  // totalCompressedBytes += writeCodebookLastValues(trackData, "audio_decode_duration", durationCodebook, durationCodeIndex);
-  // totalCompressedBytes += writeCodebookLastValues(trackData, "audio_decode_velocity", velocityCodebook, velocityCodeIndex);
+  // totalCompressedBytes += writeCodebookLastValues(trackData, "audio_decode_volume", volumeCodebook, volumeCodes);
+  // totalCompressedBytes += writeCodebookLastValues(trackData, "audio_decode_duration", durationCodebook, durationCodes);
+  // totalCompressedBytes += writeCodebookLastValues(trackData, "audio_decode_velocity", velocityCodebook, velocityCodes);
 
 
   // write length tables
@@ -1748,13 +1845,13 @@ void DivExportTIAZip::writeBitstreams() {
   totalCompressedBytes += writeCodebookLengths(
     trackData, 
     "audio_decode_command",
-    abstractCodebook,
+    dataCommandCodebook,
     codebookTotal
   );
   totalCompressedBytes += writeCodebookLengths(
     trackData,
     "audio_decode_span",
-    spanCodebook,
+    trackCommandCodebook,
     codebookTotal
   );
   totalCompressedBytes += writeCodebookLengths(trackData, "audio_decode_control", controlCodebook, codebookTotal);
@@ -1775,37 +1872,37 @@ void DivExportTIAZip::writeBitstreams() {
   totalCompressedBytes += writeCommandCodes(
     trackData,
     "audio_decode_command",
-    abstractCodebook, 
-    abstractCodeIndex
+    dataCommandCodebook, 
+    dataCommandCodes
   );
   totalCompressedBytes += writeCommandCodes(
     trackData,
     "audio_decode_span",
-    spanCodebook,
-    spanCodeIndex
+    trackCommandCodebook,
+    trackCommandCodes
   );
-  totalCompressedBytes += writeDataCodes(trackData, "audio_decode_control", controlCodebook, controlCodeIndex);
+  totalCompressedBytes += writeDataCodes(trackData, "audio_decode_control", controlCodebook, controlCodes);
   // totalCompressedBytes += writeDataCodes(trackData, "audio_decode_frequency", frequencyCodebook, frequencyCodeIndex);
   for (auto &x : mergedFrequencyCodebooks) {
     totalCompressedBytes += writeDataCodes(
       trackData,
       fmt::sprintf("audio_decode_control_%d_frequency", x.first).c_str(),
       x.second,
-      mergedFrequencyCodeIndexes[x.first]
+      mergedFrequencyCodes[x.first]
     );
   }
-  totalCompressedBytes += writeDataCodes(trackData, "audio_decode_volume", volumeCodebook, volumeCodeIndex);
-  totalCompressedBytes += writeDataCodes(trackData, "audio_decode_duration", durationCodebook, durationCodeIndex);
-  totalCompressedBytes += writeDataCodes(trackData, "audio_decode_velocity", velocityCodebook, velocityCodeIndex);
+  totalCompressedBytes += writeDataCodes(trackData, "audio_decode_volume", volumeCodebook, volumeCodes);
+  totalCompressedBytes += writeDataCodes(trackData, "audio_decode_duration", durationCodebook, durationCodes);
+  totalCompressedBytes += writeDataCodes(trackData, "audio_decode_velocity", velocityCodebook, velocityCodes);
 
   // macros
   writeCodebookMacro(
     trackData, 
     "audio_decode_command",
     "audio_data_stream_idx", 
-    abstractCodebook
+    dataCommandCodebook
   );
-  if (spanCodebook.size() == 1) {
+  if (trackCommandCodebook.size() == 1) {
     // BUGBUG: massive kludge
     trackData->writeText("\n    ; audio_decode_span\n");
     trackData->writeText("    MAC audio_decode_span_MACRO\n");
@@ -1816,7 +1913,7 @@ void DivExportTIAZip::writeBitstreams() {
       trackData,
       "audio_decode_span",
       "audio_span_stream_idx",
-      spanCodebook);
+      trackCommandCodebook);
   }
   writeCodebookMacro(trackData, "audio_decode_control", "audio_data_stream_idx", controlCodebook);
   if (mergedFrequencyCodebooks.size() == 1) {
@@ -1853,13 +1950,13 @@ void DivExportTIAZip::writeBitstreams() {
   for (auto &x : compressedCodeSequences) {
     totalCompressedCodeSequenceSize += x.size();
   }
-  size_t totalSpanSequenceSize = 0;
-  for (auto &x : spanSequences) {
-    totalSpanSequenceSize += spanSequences.size();
+  size_t totalTrackSequenceSize = 0;
+  for (auto &x : trackSequences) {
+    totalTrackSequenceSize += trackSequences.size();
   }
 
   trackData->writeText(fmt::sprintf("; Compressed Code Sequence Length: %d\n", totalCompressedCodeSequenceSize));
-  trackData->writeText(fmt::sprintf("; Span Sequence Length: %d\n", totalSpanSequenceSize));
+  trackData->writeText(fmt::sprintf("; Track Sequence Length: %d\n", totalTrackSequenceSize));
   trackData->writeText(fmt::sprintf("; Compressed Bytes %d\n", totalCompressedBytes));
 
   output.push_back(DivROMExportOutput("Track_data.asm", trackData));
@@ -1881,14 +1978,14 @@ void DivExportTIAZip::validateBitstreams() {
       logD("reset streams %d %d", dataStream->position(), trackStream->position());
       size_t i = 0;
       size_t returnAddress = 0;
-      size_t maxOffset = 0;
+      size_t maxAddress = 0;
       unsigned char lastCx = 0;
       AlphaCode lastCommand = 0;
       while (dataStream->hasBits()) {
         size_t streamPosition = dataStream->position();
         logD("NEXT %d", streamPosition);
         AlphaCode code;
-        AlphaCode nextCommand = abstractCodeTree->decode(dataStream);
+        AlphaCode nextCommand = dataCommandCodeTree->decode(dataStream);
         if (lastCommand == CODE_BRANCH_POINT && nextCommand == CODE_BRANCH_POINT) {
           logD("SPAN: double branch point at %08x", streamPosition);
         }
@@ -1988,23 +2085,45 @@ void DivExportTIAZip::validateBitstreams() {
             // get address
             size_t nextAddress;
             bool isAddress = dataStream->readBit();
+
             if (isAddress) {
-              nextAddress = dataStream->readBits(addressBits);
+              bool isLongJump = branchPointerOptimization ? dataStream->readBit() : true;
+              if (isLongJump) {
+                logD("DATA JUMP LONG");
+                nextAddress = dataStream->readBits(addressBits);
+              } else {
+                logD("DATA JUMP SHORT");
+                // relative
+                size_t relativeJump = dataStream->readBits(11);
+                size_t shiftAddr = relativeJump & 0x07;
+                size_t relativeAddr = relativeJump >> 3;
+                bool isBackward = (relativeAddr | 0x80) > 0;
+                size_t distanceBytes = relativeAddr & 0x7f;
+                size_t nextAddressBytes = BITSTREAM_2_ADDRESS(dataStream->position()) >> 3;
+                if (isBackward) {
+                  nextAddressBytes -= distanceBytes;
+                } else {
+                  nextAddressBytes += distanceBytes;
+                }
+                nextAddress = (nextAddressBytes << 3) | shiftAddr;
+                nextAddress += streamDataOffset;
+                logD("DATA JUMP SHORT %08x = %08x|%08x, d = %d to %d - %08x", relativeJump, relativeAddr, shiftAddr, distanceBytes, nextAddressBytes, nextAddress);
+
+              }
             } else {
               size_t index = dataStream->readBits(addressIndexBits);
               nextAddress = jumpTableAddresses[index];
             }
+          
+            // BUGBUG: ADJUST HERE
             nextAddress -= streamDataOffset;
-            if (isAddress) {
-              long distance = ((long) nextAddress) - streamPosition;
-            }
-            returnAddress = dataStream->position();
-            if (maxOffset < returnAddress) {
-              maxOffset = returnAddress;
+            returnAddress = BITSTREAM_2_ADDRESS(dataStream->position());
+            if (maxAddress < returnAddress) {
+              maxAddress = returnAddress;
             }
             logD("seek X");
             assert(nextAddress < dataStream->size());
-            dataStream->seek(nextAddress);
+            dataStream->seek(ADDRESS_2_BITSTREAM(nextAddress));
             continue;
           }
 
@@ -2038,9 +2157,11 @@ void DivExportTIAZip::validateBitstreams() {
           }
 
           case CODE_BRANCH_POINT: {
+            logD("BRANCH - %08x", GET_ADDRESS_COMPONENTS(trackStream->position()));
+
             // jump and seek
             size_t trackPosition = trackStream->position();
-            AlphaCode sx = spanTree->decode(trackStream);
+            AlphaCode sx = trackCommandTree->decode(trackStream);
             size_t nextAddress;
 
             if (sx == CODE_STOP) {
@@ -2051,13 +2172,13 @@ void DivExportTIAZip::validateBitstreams() {
             } else if (sx == CODE_RETURN_LAST) {
               logD("seek A");
               assert(returnAddress < dataStream->size());
-              dataStream->seek(returnAddress);
+              dataStream->seek(ADDRESS_2_BITSTREAM(returnAddress));
               continue;
 
             } else if (sx == CODE_RETURN_FF) {
               logD("seek B");
-              assert(maxOffset < dataStream->size());
-              dataStream->seek(maxOffset);
+              assert(maxAddress < dataStream->size());
+              dataStream->seek(ADDRESS_2_BITSTREAM(maxAddress));
               continue;
             
             } else if (sx == CODE_RETURN_NOOP) {
@@ -2067,43 +2188,106 @@ void DivExportTIAZip::validateBitstreams() {
             } else if (sx == CODE_SKIP) {
               // skip next datastream address
               bool isAddress = dataStream->readBit();
-              dataStream->readBits(isAddress ? addressBits : addressIndexBits);
+              if (isAddress) {
+                bool isLongJump = branchPointerOptimization ? dataStream->readBit() : true;
+                if (isLongJump) {
+                  logD("SKIP LONG");
+                  dataStream->readBits(addressBits);
+                } else {
+                  logD("SKIP SHORT");
+                  dataStream->readBits(11);
+                }
+              } else {
+                logD("SKIP INDEX");
+                dataStream->readBits(addressIndexBits);
+              };
               continue;
 
             } else if (sx == CODE_TAKE_DATA_JUMP ) {
               bool isAddress = dataStream->readBit();
               if (isAddress) {
-                nextAddress = dataStream->readBits(addressBits);
+                bool isLongJump = branchPointerOptimization ? dataStream->readBit() : true;
+                if (isLongJump) {
+                  logD("DATA JUMP LONG");
+                  nextAddress = dataStream->readBits(addressBits);
+                } else {
+                  logD("DATA JUMP SHORT");
+                  // relative
+                  size_t relativeJump = dataStream->readBits(11);
+                  size_t shiftAddr = relativeJump & 0x07;
+                  size_t relativeAddr = relativeJump >> 3;
+                  bool isBackward = (relativeAddr | 0x80) > 0;
+                  size_t distanceBytes = relativeAddr & 0x7f;
+                  size_t nextAddressBytes = BITSTREAM_2_ADDRESS(dataStream->position()) >> 3;
+                  if (isBackward) {
+                    nextAddressBytes -= distanceBytes;
+                  } else {
+                    nextAddressBytes += distanceBytes;
+                  }
+                  nextAddress = (nextAddressBytes << 3) | shiftAddr;
+                  nextAddress += streamDataOffset;
+                  logD("DATA JUMP SHORT %08x = %08x|%08x, d = %d to %d - %08x", relativeJump, relativeAddr, shiftAddr, distanceBytes, nextAddressBytes, nextAddress);
+
+                }
               } else {
                 size_t index = dataStream->readBits(addressIndexBits);
                 nextAddress = jumpTableAddresses[index];
               }
 
             } else if (sx == CODE_TAKE_TRACK_JUMP) {
-              bool isAddress = trackStream->readBit();
+              // skip datastream pointer first
+              bool isAddress = dataStream->readBit();
               if (isAddress) {
-                nextAddress = trackStream->readBits(addressBits);
+                bool isLongJump = branchPointerOptimization ? trackStream->readBit() : true;
+                if (isLongJump) {
+                  dataStream->readBits(addressBits);
+                } else {
+                  dataStream->readBits(11);
+                }
+              } else {
+                dataStream->readBits(addressIndexBits);
+              };
+              // now read track 
+              isAddress = trackStream->readBit();
+              if (isAddress) {
+                bool isLongJump = branchPointerOptimization ? trackStream->readBit() : true;
+                if (isLongJump) {
+                  nextAddress = trackStream->readBits(addressBits);
+                } else {
+                  // relative
+                  size_t relativeJump = trackStream->readBits(11);
+                  size_t shiftAddr = relativeJump & 0x07;
+                  size_t relativeAddr = relativeJump >> 3;
+                  size_t isBackward = relativeAddr | 0x80;
+                  size_t distanceBytes = relativeAddr & 0x7f;
+                  size_t nextAddressBytes = BITSTREAM_2_ADDRESS(dataStream->position()) >> 3;
+                  if (isBackward) {
+                    nextAddressBytes -= distanceBytes;
+                  } else {
+                    nextAddressBytes += distanceBytes;
+                  }
+                  nextAddress = (nextAddressBytes << 3) | shiftAddr;
+                  nextAddress += streamDataOffset;
+                }
               } else {
                 size_t index = trackStream->readBits(addressIndexBits);
                 nextAddress = jumpTableAddresses[index];
               }
-              // skip datastream pointer
-              isAddress = dataStream->readBit();
-              dataStream->readBits(isAddress ? addressBits : addressIndexBits);
 
             } else {
               // should not happen
               assert(false);
             }
 
+            // BUGBUG: ADJUST HERE
             nextAddress -= streamDataOffset;
-            returnAddress = dataStream->position();
-            if (maxOffset < returnAddress) {
-              maxOffset = returnAddress;
+            returnAddress = BITSTREAM_2_ADDRESS(dataStream->position());
+            if (maxAddress < returnAddress) {
+              maxAddress = returnAddress;
             }
             logD("seek C");
             assert(nextAddress < dataStream->size());
-            dataStream->seek(nextAddress);
+            dataStream->seek(ADDRESS_2_BITSTREAM(nextAddress));
             continue;
           }
           
@@ -2112,7 +2296,7 @@ void DivExportTIAZip::validateBitstreams() {
         }
         AlphaCode codeToCompare = codeSequence[i++];
         if (code != codeToCompare) {
-          logD("%d/%d: (%d/%d) [%d, %d] %016x ?= %016x", i, codeSequence.size(), streamPosition, dataStream->size(), returnAddress, maxOffset, code, codeToCompare);
+          logD("%d/%d: (%d/%d) [%d, %d] %016x ?= %016x", i, codeSequence.size(), streamPosition, dataStream->size(), returnAddress, maxAddress, code, codeToCompare);
         }
         assert(code == codeToCompare);
       }
@@ -2365,113 +2549,113 @@ void DivExportTIAZip::validateCodeSequence(
   int channel,
   const std::vector<AlphaCode> &codeSequence,
   const std::vector<AlphaCode> &compressedCodeSequence,
-  const std::vector<AlphaCode> &spanSequence
+  const std::vector<AlphaCode> &trackSequence
 ) {
   // Test compression correctness 
-  auto it = spanSequence.begin();
-  size_t nextReadAddress = 0, compareAddress = 0;
-  size_t maxOffset = 0;
-  size_t returnAddress = 0;
+  auto it = trackSequence.begin();
+  size_t nextReadIndex = 0, compareIndex = 0;
+  size_t maxIndex = 0;
+  size_t returnIndex = 0;
   while (true) {
-    AlphaCode c = compressedCodeSequence[nextReadAddress];
+    AlphaCode c = compressedCodeSequence[nextReadIndex];
     CODE_TYPE codeType = GET_CODE_TYPE(c);
     if (c == CODE_TAKE_DATA_JUMP) {
-        nextReadAddress++;
-        AlphaCode c = compressedCodeSequence[nextReadAddress];
-        size_t jumpAddress = GET_CODE_JUMP_ADDRESS(c);
+        nextReadIndex++;
+        AlphaCode c = compressedCodeSequence[nextReadIndex];
+        size_t returnIndex = GET_CODE_JUMP_INDEX(c);
         assert(CODE_TYPE::JUMP == GET_CODE_TYPE(c));
-        if (jumpAddress >= maxOffset) {
+        if (returnIndex >= maxIndex) {
           logD("missed force goto back to front");
         }
-        if (jumpAddress == returnAddress) {
+        if (returnIndex == returnIndex) {
           logD("missed force goto back to last");
         }
-        returnAddress = nextReadAddress + 1;
-        if (returnAddress >= maxOffset) {
-          maxOffset = returnAddress;
+        returnIndex = nextReadIndex + 1;
+        if (returnIndex >= maxIndex) {
+          maxIndex = returnIndex;
         }
-        nextReadAddress = jumpAddress;
+        nextReadIndex = returnIndex;
         continue;
 
     } else if (codeType == CODE_TYPE::BRANCH_POINT) {
-      nextReadAddress++;
-      assert(it != spanSequence.end());
+      nextReadIndex++;
+      assert(it != trackSequence.end());
       AlphaCode s = *it++;
       if (s == CODE_STOP) {
-        AlphaCode x = codeSequence[compareAddress];
+        AlphaCode x = codeSequence[compareIndex];
         if (x != CODE_STOP) {
-          logD("%d %d | %d: no stop found at %d: %016x", subsong, channel, nextReadAddress, compareAddress, x);
+          logD("%d %d | %d: no stop found at %d: %016x", subsong, channel, nextReadIndex, compareIndex, x);
           assert(false);
         }
-        assert(it == spanSequence.end());
-        compareAddress++;
+        assert(it == trackSequence.end());
+        compareIndex++;
         break;
         
       } else if (s == CODE_SKIP) {
         // skip 1 in data stream 
-        nextReadAddress++;
+        nextReadIndex++;
         
       } else if (s == CODE_TAKE_DATA_JUMP) {
-        AlphaCode c = compressedCodeSequence[nextReadAddress];
-        size_t jumpAddress = GET_CODE_JUMP_ADDRESS(c);
+        AlphaCode c = compressedCodeSequence[nextReadIndex];
+        size_t jumpIndex = GET_CODE_JUMP_INDEX(c);
         assert(CODE_TYPE::JUMP == GET_CODE_TYPE(c));
-        if (jumpAddress >= maxOffset) {
+        if (jumpIndex >= maxIndex) {
           logD("missed goto back to front");
         }
-        if (jumpAddress == returnAddress) {
+        if (jumpIndex == returnIndex) {
           logD("missed goto back to last");
         }
-        returnAddress = nextReadAddress + 1;
-        if (returnAddress >= maxOffset) {
-          maxOffset = returnAddress;
+        returnIndex = nextReadIndex + 1;
+        if (returnIndex >= maxIndex) {
+          maxIndex = returnIndex;
         }
-        logD("goto %d", jumpAddress);
-        nextReadAddress = jumpAddress;
+        logD("goto %d", jumpIndex);
+        nextReadIndex = jumpIndex;
 
       } else if (s == CODE_RETURN_FF) {
-        logD("return to front %d", maxOffset);
-        nextReadAddress = maxOffset;
+        logD("return to front %d", maxIndex);
+        nextReadIndex = maxIndex;
         it++;
 
       } else if (s == CODE_RETURN_LAST) {
-        logD("return to last %d", returnAddress);
-        nextReadAddress = returnAddress;
+        logD("return to last %d", returnIndex);
+        nextReadIndex = returnIndex;
         it++;
 
       } else if (s == CODE_TAKE_TRACK_JUMP) {
         s = *it++;
-        size_t jumpAddress = GET_CODE_JUMP_ADDRESS(s);
-        if (jumpAddress >= maxOffset) {
+        size_t jumpIndex = GET_CODE_JUMP_INDEX(s);
+        if (jumpIndex >= maxIndex) {
           logD("missed jump back to front");
         }
-        if (jumpAddress == returnAddress) {
+        if (jumpIndex == returnIndex) {
           logD("missed jump back to last");
         }
-        returnAddress = nextReadAddress + 1;
-        if (returnAddress >= maxOffset) {
-          maxOffset = returnAddress;
+        returnIndex = nextReadIndex + 1;
+        if (returnIndex >= maxIndex) {
+          maxIndex = returnIndex;
         }
-        logD("jump to %d", jumpAddress);
-        nextReadAddress = jumpAddress;
+        logD("jump to %d", jumpIndex);
+        nextReadIndex = jumpIndex;
 
       } else {
         assert(false);
       }
     } else {
-      AlphaCode x = codeSequence[compareAddress];
+      AlphaCode x = codeSequence[compareIndex];
       if (c != x) {
-        logD("%d %d | %d: %08x    %08x",subsong, channel, nextReadAddress, compressedCodeSequence[nextReadAddress-1], codeSequence[compareAddress-1]);
-        logD("%d %d | %d: %08x <> %08x (%d)",subsong, channel, nextReadAddress, c, x, compareAddress);
-        logD("%d %d | %d: %08x    %08x",subsong, channel, nextReadAddress+1, compressedCodeSequence[nextReadAddress+1], codeSequence[compareAddress+1]);
+        logD("%d %d | %d: %08x    %08x",subsong, channel, nextReadIndex, compressedCodeSequence[nextReadIndex-1], codeSequence[compareIndex-1]);
+        logD("%d %d | %d: %08x <> %08x (%d)",subsong, channel, nextReadIndex, c, x, compareIndex);
+        logD("%d %d | %d: %08x    %08x",subsong, channel, nextReadIndex+1, compressedCodeSequence[nextReadIndex+1], codeSequence[compareIndex+1]);
         assert(false);
       }
-      nextReadAddress++;
-      compareAddress++;
+      nextReadIndex++;
+      compareIndex++;
     }
   }
     
-  logD("valid at %d/%d", compareAddress, codeSequence.size());
-  assert(compareAddress == codeSequence.size());
+  logD("valid at %d/%d", compareIndex, codeSequence.size());
+  assert(compareIndex == codeSequence.size());
 }
 
 size_t DivExportTIAZip::encodeChannelStateCodes(
