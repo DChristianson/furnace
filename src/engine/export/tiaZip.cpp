@@ -134,15 +134,19 @@
 // >>> 3741 + 155 base
 // 3896
 //    - Coconut Mall 4k
-//        - try separate channel code compression
-//        - try separate effects tracks
-//        - try separate instrument encodings
-//        - instrumate ADSR to handle volume?
-//        - properly analytic span compression analysis?
+//        - try separate channel code compression (INCONCLUSIVE)
+//        - try separate effects tracks (NO)
+//        - try separate instrument encodings  (YES)
+//        - instrumate ADSR to handle volume? (YES)
+//        - properly analytic span compression analysis? (FAKED IT)
+//    - compression nits
+//        - double jumps exist
+//        - 0 distance jumps could be skip except for return
 //  - debugging
 //    - proper analytic debug output for TIAZIP spans
 //  - glitch
 //    - two track jumps in one frame goes over
+//      - try saving returns at start of branch then doing skips on return...?
 //    - tia_entertainer has inconsistent timing, missing patterns
 //      - missing pattern 0 causes glitching with FSEQ codex
 //  - testability
@@ -932,7 +936,7 @@ void DivExportTIAZip::compressCodeSequence(
     bool repeatSpan = end > span.start;
     // traverse span
     for (size_t i = span.start; i < spanEnd; i++) {
-      size_t leftmostCodeAddr = copyMap[end];
+      size_t leftmostCodeIndex = copyMap[end];
       if (!repeatSpan) {
         AlphaCode c = codeSequence[i];
         labels[i] = compressedCodeSequence.size();
@@ -945,20 +949,20 @@ void DivExportTIAZip::compressCodeSequence(
 
         } else {
           // write regular
-          logD("%d|%d write %016x at %d", end, leftmostCodeAddr, c, compressedCodeSequence.size());
+          logD("%d|%d write %016x at %d", end, leftmostCodeIndex, c, compressedCodeSequence.size());
           compressedCodeSequence.emplace_back(c);
         }
       } else {
-        logD("%d|%d ...", end, leftmostCodeAddr);
+        logD("%d|%d ...", end, leftmostCodeIndex);
       }
       end++;
       assert (end < copyMap.size());
       size_t nextCodeIndex = copyMap[end];
-      auto& branchTable = branchFrequencyMap[leftmostCodeAddr];
-      if (nextCodeIndex == leftmostCodeAddr + 1 && branchTable.size() < 2) {
+      auto& branchTable = branchFrequencyMap[leftmostCodeIndex];
+      if (nextCodeIndex == leftmostCodeIndex + 1 && branchTable.size() < 2) {
         continue;
       }
-      size_t skipCodeIndex = skipMap[leftmostCodeAddr];
+      size_t skipCodeIndex = skipMap[leftmostCodeIndex];
       if (branchTable.size() < 2) {
         logD("force goto");
         totalGoto++;
@@ -974,23 +978,23 @@ void DivExportTIAZip::compressCodeSequence(
           if (x.first == nextCodeIndex) {
             mods += "<";
           }
-          if (x.first == leftmostCodeAddr + 1) {
+          if (x.first == leftmostCodeIndex + 1) {
             mods += "+";
           }
-          logD("%d: -> %d (freq %d) %s", leftmostCodeAddr, x.first, x.second, mods);
+          logD("%d: -> %d (freq %d) %s", leftmostCodeIndex, x.first, x.second, mods);
         }
       }
       if (branchTable.size() > 1) {
         if (nextCodeIndex == skipCodeIndex) {
           trackSequence.emplace_back(CODE_TAKE_DATA_JUMP);
-          logD("%d|%d use goto %d from %d", end-1, leftmostCodeAddr, nextCodeIndex, labels[leftmostCodeAddr] + 1);
-        } else if (nextCodeIndex == leftmostCodeAddr + 1) {
+          logD("%d|%d use goto %d from %d", end-1, leftmostCodeIndex, nextCodeIndex, labels[leftmostCodeIndex] + 1);
+        } else if (nextCodeIndex == leftmostCodeIndex + 1) {
           trackSequence.emplace_back(CODE_SKIP);
-          logD("%d|%d use skip", end-1, leftmostCodeAddr);
+          logD("%d|%d use skip", end-1, leftmostCodeIndex);
         } else {
           trackSequence.emplace_back(CODE_TAKE_TRACK_JUMP);
           trackSequence.emplace_back(CODE_JUMP(subsong, channel, nextCodeIndex));
-          logD("%d|%d use jump %d ", end-1, leftmostCodeAddr, nextCodeIndex);
+          logD("%d|%d use jump %d ", end-1, leftmostCodeIndex, nextCodeIndex);
         }
       }
     }
@@ -1082,8 +1086,8 @@ void DivExportTIAZip::compressCodeSequence(
         logD("rewriting to return front from %d to %d", nextReadIndex-1, maxIndex);
 
       } else {
-        trackPositionMap[nextSpanIndex] = nextReadIndex;
         returnIndex = nextReadIndex + 1;
+        trackPositionMap[nextSpanIndex] = returnIndex;
         if (returnIndex >= maxIndex) {
           maxIndex = returnIndex;
         }
@@ -1242,6 +1246,24 @@ void DivExportTIAZip::assembleBitstreams()
 
   // merge frequencies  
   logD("merging frequency trees");
+  // controlCodeMergeMap = {
+  //   {0, 0},
+  //   {1, 0},
+  //   {2, 0},
+  //   {3, 0},
+  //   {4, compressionLevel > 1 ? 1 : 0},
+  //   {5, 0},
+  //   {6, compressionLevel > 1 ? 1 : 0},
+  //   {7, 0},
+  //   {8, compressionLevel > 1 ? 2 : 0},
+  //   {9, 0},
+  //   {10, 0},
+  //   {11, 0},
+  //   {12, compressionLevel > 1 ? 1 : 0},
+  //   {13, 0},
+  //   {14, 0},
+  //   {15, compressionLevel > 1 ? 2 : 0},
+  // };
   controlCodeMergeMap = {
     {0, 0},
     {1, 0},
@@ -1427,21 +1449,21 @@ void DivExportTIAZip::assembleBitstreams()
 
           } else if (branchPointerOptimization) {
             // figure out short versus long jump bytes
-            size_t address = GET_CODE_JUMP_INDEX(s);
-            size_t targetAddress = BITSTREAM_2_ADDRESS(positionMap.at(address));
-            size_t sourceAddress = BITSTREAM_2_ADDRESS(positionMap.at(trackPositionMap.at(i)+1));
-            
+            size_t targetPosition = GET_CODE_JUMP_INDEX(s);
+            size_t targetAddress = BITSTREAM_2_ADDRESS(positionMap[targetPosition]);
+            size_t sourcePosition = trackPositionMap.at(i);
+            size_t sourceAddress = BITSTREAM_2_ADDRESS(positionMap[sourcePosition]);
             size_t targetAddressBytes = targetAddress >> 3;
             size_t sourceAddressBytes = sourceAddress >> 3;
             long distanceBytes = targetAddressBytes - sourceAddressBytes;
             if (distanceBytes >= -128 && distanceBytes <= 127) {
               // short jump
-              logD("SPAN %d %d %08x - JUMP SHORT %08x (%d)", subsong, channel, GET_ADDRESS_COMPONENTS(trackStream->position()), targetAddress, distanceBytes);
               size_t shiftAddr = targetAddress & 0x07;
               size_t shortJump = ((0xff & distanceBytes) << 3) | shiftAddr;
+              logD("SPAN %d %d %08x - JUMP SHORT data stream %d -> %d source %08x -> target %08x (distance %d) code %08x", subsong, channel, GET_ADDRESS_COMPONENTS(trackStream->position()), sourcePosition, targetPosition, sourceAddress, targetAddress, distanceBytes, shortJump);
               trackStream->writeBit(true); // no lookup
               trackStream->writeBit(false); // short
-              dataStream->writeBits(shortJump, 11);
+              trackStream->writeBits(shortJump, 11);
 
             } else {
               // long jump
@@ -2096,7 +2118,7 @@ void DivExportTIAZip::validateBitstreams() {
                 size_t relativeJump = dataStream->readBits(11);
                 size_t shiftAddr = relativeJump & 0x07;
                 size_t relativeAddr = relativeJump >> 3;
-                if (relativeAddr | 0x80) {
+                if (relativeAddr & 0x80) {
                   relativeAddr |= -256;
                 }
                 size_t nextAddressBytes = BITSTREAM_2_ADDRESS(dataStream->position()) >> 3;
@@ -2110,6 +2132,7 @@ void DivExportTIAZip::validateBitstreams() {
             } else {
               size_t index = dataStream->readBits(addressIndexBits);
               nextAddress = jumpTableAddresses[index];
+              logD("DATA JUMP INDEX %d -> %08x", index, nextAddress);
             }
           
             // BUGBUG: ADJUST HERE
@@ -2212,7 +2235,7 @@ void DivExportTIAZip::validateBitstreams() {
                   size_t relativeJump = dataStream->readBits(11);
                   size_t shiftAddr = relativeJump & 0x07;
                   size_t relativeAddr = relativeJump >> 3;
-                  if (relativeAddr | 0x80) {
+                  if (relativeAddr & 0x80) {
                     relativeAddr |= -256;
                   }
                   size_t nextAddressBytes = BITSTREAM_2_ADDRESS(dataStream->position()) >> 3;
@@ -2222,18 +2245,18 @@ void DivExportTIAZip::validateBitstreams() {
                   logD("DATA JUMP SHORT next %08x nextBytes %08x offset %08x", nextAddress, nextAddressBytes, streamDataOffset);
                   nextAddress += streamDataOffset;
                   logD("DATA JUMP SHORT %08x = %08x|%08x to %08x %d", relativeJump, relativeAddr, shiftAddr, nextAddress, nextAddressBytes);
-  
                 }
               } else {
                 size_t index = dataStream->readBits(addressIndexBits);
                 nextAddress = jumpTableAddresses[index];
+                logD("DATA JUMP INDEX %d -> %08x", index, nextAddress);
               }
 
             } else if (sx == CODE_TAKE_TRACK_JUMP) {
               // skip datastream pointer first
               bool isAddress = dataStream->readBit();
               if (isAddress) {
-                bool isLongJump = branchPointerOptimization ? trackStream->readBit() : true;
+                bool isLongJump = branchPointerOptimization ? dataStream->readBit() : true;
                 if (isLongJump) {
                   dataStream->readBits(addressBits);
                 } else {
@@ -2247,23 +2270,29 @@ void DivExportTIAZip::validateBitstreams() {
               if (isAddress) {
                 bool isLongJump = branchPointerOptimization ? trackStream->readBit() : true;
                 if (isLongJump) {
+                  logD("TRACK JUMP LONG");
                   nextAddress = trackStream->readBits(addressBits);
                 } else {
+                  logD("TRACK JUMP SHORT from %08x", BITSTREAM_2_ADDRESS(dataStream->position()));
                   // relative
                   size_t relativeJump = trackStream->readBits(11);
                   size_t shiftAddr = relativeJump & 0x07;
                   size_t relativeAddr = relativeJump >> 3;
-                  if (relativeAddr | 0x80) {
+                  if (relativeAddr & 0x80) {
                     relativeAddr |= -256;
                   }
                   size_t nextAddressBytes = BITSTREAM_2_ADDRESS(dataStream->position()) >> 3;
+                  logD("TRACK JUMP SHORT sourceAddr %d aka %08x nextBytes %d", dataStream->position(), BITSTREAM_2_ADDRESS(dataStream->position()), nextAddressBytes);
                   nextAddressBytes = nextAddressBytes + relativeAddr;
                   nextAddress = (nextAddressBytes << 3) | shiftAddr;
+                  logD("TRACK JUMP SHORT next %08x nextBytes %08x offset %08x", nextAddress, nextAddressBytes, streamDataOffset);
                   nextAddress += streamDataOffset;
+                  logD("TRACK JUMP SHORT %08x = %08x|%08x to %08x %d", relativeJump, relativeAddr, shiftAddr, nextAddress, nextAddressBytes);
                 }
               } else {
                 size_t index = trackStream->readBits(addressIndexBits);
                 nextAddress = jumpTableAddresses[index];
+                logD("TRACK JUMP INDEX %d -> %08x", index, nextAddress);
               }
 
             } else {
