@@ -217,7 +217,7 @@ _audio_stream_read_jump_idx
             lda AUDIO_JUMP_TABLE_LO_START,y
             sta audio_stream_next_addr_lo
             lda AUDIO_JUMP_TABLE_HI_START,y
-            and #$0f
+            ora #$f0
             sta audio_stream_next_addr_hi
             lda AUDIO_JUMP_TABLE_HI_START,y
             lsr
@@ -228,9 +228,13 @@ _audio_stream_read_jump_idx
             bpl _audio_stream_read_return
 _audio_stream_read_in_stream
             READ_BIT_NO_SAVE_BUF
-            ldy #%11100000
+            bcs _audio_stream_read_long
+            ldy #%00000000
             sty audio_stream_next_addr_hi
             bcc _audio_stream_read_short
+_audio_stream_read_long
+            ldy #%11101111
+            sty audio_stream_next_addr_hi
 _audio_stream_read_hi
             READ_BIT_NO_SAVE_BUF
             rol audio_stream_next_addr_hi
@@ -273,14 +277,11 @@ _audio_stream_save_ff
             lda audio_data_last_hi,x
             sta audio_data_ff_hi,x
 _audio_stream_save_return
-            bit audio_stream_next_addr_hi
-            bpl _audio_jump_long
-            ldy #0
+            ldy audio_stream_next_addr_hi
+            bne _audio_jump_long
             lda audio_stream_next_addr_lo
             bpl _audio_jump_short
-            ldy #$ff
-            eor #$7f
-            adc #0 ; carry set
+            dey ; y already 0
 _audio_jump_short
             clc
             adc audio_stream_lo,x
@@ -290,23 +291,20 @@ _audio_jump_short
             sta audio_stream_hi,x
             jmp _audio_jump_shift
 _audio_jump_long
+            sty audio_stream_hi,x
             lda audio_stream_next_addr_lo
             sta audio_stream_lo,x
-            lda audio_stream_next_addr_hi
-            sta audio_stream_hi,x
 _audio_jump_shift
-            lda audio_stream_next_addr_buf
-            beq _audio_skip_shift
-            tay
+            ldy audio_stream_next_addr_buf
             lda (audio_stream_ptr,x)
             sec
             ror
             dey
-            beq _audio_end_shift_loop
+            bmi _audio_end_shift_loop
 _audio_do_shift_loop
             lsr
             dey
-            bne _audio_do_shift_loop
+            bpl _audio_do_shift_loop
 _audio_end_shift_loop
 _audio_skip_shift
             sta audio_stream_buf,x

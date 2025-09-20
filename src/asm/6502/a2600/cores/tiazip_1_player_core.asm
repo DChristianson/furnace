@@ -217,7 +217,7 @@ _audio_stream_read_jump_idx
             lda AUDIO_JUMP_TABLE_LO_START,y
             sta audio_stream_next_addr_lo
             lda AUDIO_JUMP_TABLE_HI_START,y
-            and #$0f
+            ora #$f0
             sta audio_stream_next_addr_hi
             lda AUDIO_JUMP_TABLE_HI_START,y
             lsr
@@ -227,7 +227,7 @@ _audio_stream_read_jump_idx
             sta audio_stream_next_addr_buf
             bpl _audio_stream_read_return
 _audio_stream_read_in_stream
-            ldy #%00010000
+            ldy #%00011111
             sty audio_stream_next_addr_hi
 _audio_stream_read_hi
             READ_BIT_NO_SAVE_BUF
@@ -274,24 +274,22 @@ _audio_stream_save_return
             sta audio_stream_lo,x
             lda audio_stream_next_addr_hi
             sta audio_stream_hi,x
-            lda audio_stream_next_addr_buf
-            beq _audio_skip_shift
-            tay
+            ldy audio_stream_next_addr_buf
             lda (audio_stream_ptr,x)
             sec
             ror
             dey
-            beq _audio_end_shift_loop
+            bmi _audio_end_shift_loop
 _audio_do_shift_loop
             lsr
             dey
-            bne _audio_do_shift_loop
+            bpl _audio_do_shift_loop
 _audio_end_shift_loop
 _audio_skip_shift
             sta audio_stream_buf,x
             ldx audio_channel_idx
             jmp _audio_update_next_command
-               
+
 SPAN_IDX
   byte 4,6
 

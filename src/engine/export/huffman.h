@@ -89,6 +89,7 @@ public:
   void writeBits(size_t value, unsigned char bits);
 
   void seek(size_t index) {
+    assert(index <= endPos);
     pos = index;
   }
 

@@ -239,7 +239,7 @@ void DivExportTIAZip::run() {
   maxSustain = conf.getInt("maxSustain", 16);
   jumpMapBits = conf.getInt("jumpMapBits", 5);
   branchPointerOptimization = conf.getBool("bpo", false);
-  baseDataOffset = 0x0200;
+  baseDataOffset = 0xF100;
   blockSize = 4096 * 8;
   addressBits = 15;
   addressIndexBits = jumpMapBits;
@@ -1052,12 +1052,12 @@ void DivExportTIAZip::compressCodeSequence(
     } else if (s == CODE_TAKE_DATA_JUMP) {
       // decisioned inline jump
       c = compressedCodeSequence[nextReadIndex++];
-      size_t returnIndex = GET_CODE_JUMP_INDEX(c);
+      size_t jumpIndex = GET_CODE_JUMP_INDEX(c);
       returnIndex = nextReadIndex;
       if (returnIndex >= maxIndex) {
         maxIndex = returnIndex;
       }
-      nextReadIndex = returnIndex;
+      nextReadIndex = jumpIndex;
 
     } else  if (s == CODE_RETURN_FF) {
         nextReadIndex = maxIndex;
@@ -1070,16 +1070,16 @@ void DivExportTIAZip::compressCodeSequence(
     } else if (s == CODE_TAKE_TRACK_JUMP) {
       s = trackSequence[nextSpanIndex];
       assert(GET_CODE_TYPE(s) == CODE_TYPE::JUMP);
-      size_t returnIndex = GET_CODE_JUMP_INDEX(s);
-      if (returnIndex == returnIndex) {
+      size_t jumpIndex = GET_CODE_JUMP_INDEX(s);
+      if (jumpIndex == returnIndex) {
         trackSequence[nextSpanIndex-1] = CODE_RETURN_LAST;
         trackSequence[nextSpanIndex] = CODE_RETURN_NOOP;
         logD("rewriting to return last from %d to %d", nextReadIndex-1, returnIndex);
 
-      } else if (returnIndex == maxIndex) {
+      } else if (jumpIndex == maxIndex) {
         trackSequence[nextSpanIndex-1] = CODE_RETURN_FF;
         trackSequence[nextSpanIndex] = CODE_RETURN_NOOP;
-        logD("rewriting to return front from %d to %d", nextReadIndex-1, returnIndex);
+        logD("rewriting to return front from %d to %d", nextReadIndex-1, maxIndex);
 
       } else {
         trackPositionMap[nextSpanIndex] = nextReadIndex;
@@ -1088,7 +1088,7 @@ void DivExportTIAZip::compressCodeSequence(
           maxIndex = returnIndex;
         }
       }
-      nextReadIndex = returnIndex;
+      nextReadIndex = jumpIndex;
       nextSpanIndex++;
 
     } else {
@@ -1433,13 +1433,12 @@ void DivExportTIAZip::assembleBitstreams()
             
             size_t targetAddressBytes = targetAddress >> 3;
             size_t sourceAddressBytes = sourceAddress >> 3;
-            bool jumpForward = targetAddressBytes > sourceAddressBytes;
-            size_t distanceBytes = jumpForward ? (targetAddressBytes - sourceAddressBytes) : (sourceAddressBytes - targetAddressBytes);
-            if (distanceBytes <= 127) {
+            long distanceBytes = targetAddressBytes - sourceAddressBytes;
+            if (distanceBytes >= -128 && distanceBytes <= 127) {
               // short jump
               logD("SPAN %d %d %08x - JUMP SHORT %08x (%d)", subsong, channel, GET_ADDRESS_COMPONENTS(trackStream->position()), targetAddress, distanceBytes);
               size_t shiftAddr = targetAddress & 0x07;
-              size_t shortJump = (((jumpForward ? 0x00 : 0x80) | distanceBytes) << 3) | shiftAddr;
+              size_t shortJump = ((0xff & distanceBytes) << 3) | shiftAddr;
               trackStream->writeBit(true); // no lookup
               trackStream->writeBit(false); // short
               dataStream->writeBits(shortJump, 11);
@@ -1611,7 +1610,7 @@ Bitstream * DivExportTIAZip::assembleDatastream(
           }
 
           case JUMP_POINTER_TYPE::LONG: {
-            size_t targetAddress = BITSTREAM_2_ADDRESS(GET_CODE_JUMP_INDEX(c));
+            size_t targetAddress = GET_CODE_JUMP_INDEX(c);
             logD("DATA %d@%08x - JUMP LONG %08x", i, GET_ADDRESS_COMPONENTS(dataStream->position()), targetAddress);
             dataStream->writeBit(true); // no lookup
             if (branchPointerOptimization) {
@@ -1659,16 +1658,15 @@ Bitstream * DivExportTIAZip::assembleDatastream(
         size_t targetAddressBytes = targetAddress >> 3;
         size_t sourceAddress = BITSTREAM_2_ADDRESS(x.first + 11 + streamDataOffset);
         size_t sourceAddressBytes = sourceAddress >> 3;
-        bool jumpForward = targetAddressBytes > sourceAddressBytes;
         size_t shiftAddr = targetAddress & 0x07;
-
-        size_t distanceBytes = jumpForward ? (targetAddressBytes - sourceAddressBytes) : (sourceAddressBytes - targetAddressBytes);
-        if (distanceBytes > 127) {
+        long distanceBytes = targetAddressBytes - sourceAddressBytes;
+        if (distanceBytes > 127 || distanceBytes < -128) {
           tooBigJumps.push_back(x.second.first);
         }
-        size_t shortJump = (((jumpForward ? 0x00 : 0x80) | distanceBytes) << 3) | shiftAddr;
+        size_t shortJump = ((0xff & distanceBytes) << 3) | shiftAddr;
         dataStream->writeBits(shortJump, 11);
         logD("DATA - REMAP JUMP RELATIVE@%08x: %08x -> %08x -> %08x (%08x is %d bits) (distance %d is %d bits)", GET_ADDRESS_COMPONENTS(x.first), GET_ADDRESS_COMPONENTS(sourceAddress), shortJump, GET_ADDRESS_COMPONENTS(targetAddress), targetAddress, msb(targetAddress), distanceBytes, msb(distanceBytes));
+
         break;
 
       }
@@ -1713,8 +1711,8 @@ void DivExportTIAZip::writeBitstreams() {
     // note reverse order for copy routine
     trackData->writeText(fmt::sprintf("    byte >(AUDIO_TRACK_S%d_C1_START - 1), <(AUDIO_TRACK_S%d_C1_START - 1)\n", subsong, subsong));
     trackData->writeText(fmt::sprintf("    byte >(AUDIO_TRACK_S%d_C0_START - 1), <(AUDIO_TRACK_S%d_C0_START - 1)\n", subsong, subsong));
-    trackData->writeText(fmt::sprintf("    byte >(AUDIO_DATA_S%d_C1_START - 1), <(AUDIO_DATA_S%d_C1_START - 1)\n", subsong, subsong));
-    trackData->writeText(fmt::sprintf("    byte >(AUDIO_DATA_S%d_C0_START - 1), <(AUDIO_DATA_S%d_C0_START - 1)\n", subsong, subsong));
+    trackData->writeText(fmt::sprintf("    byte >(AUDIO_DATA_S%d_C1_START - 1)), <(AUDIO_DATA_S%d_C1_START - 1)\n", subsong, subsong));
+    trackData->writeText(fmt::sprintf("    byte >(AUDIO_DATA_S%d_C0_START - 1)), <(AUDIO_DATA_S%d_C0_START - 1)\n", subsong, subsong));
     songDataSize += 8;
   }
   trackData->writeText("    ENDM\n");
@@ -1986,6 +1984,7 @@ void DivExportTIAZip::validateBitstreams() {
         logD("NEXT %d", streamPosition);
         AlphaCode code;
         AlphaCode nextCommand = dataCommandCodeTree->decode(dataStream);
+        logD("NEXT %d - %d", streamPosition, dataStream->position());
         if (lastCommand == CODE_BRANCH_POINT && nextCommand == CODE_BRANCH_POINT) {
           logD("SPAN: double branch point at %08x", streamPosition);
         }
@@ -2092,22 +2091,20 @@ void DivExportTIAZip::validateBitstreams() {
                 logD("DATA JUMP LONG");
                 nextAddress = dataStream->readBits(addressBits);
               } else {
-                logD("DATA JUMP SHORT");
+                logD("DATA JUMP SHORT from %08x", BITSTREAM_2_ADDRESS(dataStream->position()));
                 // relative
                 size_t relativeJump = dataStream->readBits(11);
                 size_t shiftAddr = relativeJump & 0x07;
                 size_t relativeAddr = relativeJump >> 3;
-                bool isBackward = (relativeAddr | 0x80) > 0;
-                size_t distanceBytes = relativeAddr & 0x7f;
-                size_t nextAddressBytes = BITSTREAM_2_ADDRESS(dataStream->position()) >> 3;
-                if (isBackward) {
-                  nextAddressBytes -= distanceBytes;
-                } else {
-                  nextAddressBytes += distanceBytes;
+                if (relativeAddr | 0x80) {
+                  relativeAddr |= -256;
                 }
+                size_t nextAddressBytes = BITSTREAM_2_ADDRESS(dataStream->position()) >> 3;
+                nextAddressBytes = nextAddressBytes + relativeAddr; 
                 nextAddress = (nextAddressBytes << 3) | shiftAddr;
+                logD("DATA JUMP SHORT next %08x nextBytes %08x offset %08x", nextAddress, nextAddressBytes, streamDataOffset);
                 nextAddress += streamDataOffset;
-                logD("DATA JUMP SHORT %08x = %08x|%08x, d = %d to %d - %08x", relativeJump, relativeAddr, shiftAddr, distanceBytes, nextAddressBytes, nextAddress);
+                logD("DATA JUMP SHORT %08x =  rel|shift %08x|%08x to next %08x", relativeJump, relativeAddr, shiftAddr, nextAddress);
 
               }
             } else {
@@ -2122,7 +2119,6 @@ void DivExportTIAZip::validateBitstreams() {
               maxAddress = returnAddress;
             }
             logD("seek X");
-            assert(nextAddress < dataStream->size());
             dataStream->seek(ADDRESS_2_BITSTREAM(nextAddress));
             continue;
           }
@@ -2211,23 +2207,22 @@ void DivExportTIAZip::validateBitstreams() {
                   logD("DATA JUMP LONG");
                   nextAddress = dataStream->readBits(addressBits);
                 } else {
-                  logD("DATA JUMP SHORT");
+                  logD("DATA JUMP SHORT from %08x", BITSTREAM_2_ADDRESS(dataStream->position()));
                   // relative
                   size_t relativeJump = dataStream->readBits(11);
                   size_t shiftAddr = relativeJump & 0x07;
                   size_t relativeAddr = relativeJump >> 3;
-                  bool isBackward = (relativeAddr | 0x80) > 0;
-                  size_t distanceBytes = relativeAddr & 0x7f;
-                  size_t nextAddressBytes = BITSTREAM_2_ADDRESS(dataStream->position()) >> 3;
-                  if (isBackward) {
-                    nextAddressBytes -= distanceBytes;
-                  } else {
-                    nextAddressBytes += distanceBytes;
+                  if (relativeAddr | 0x80) {
+                    relativeAddr |= -256;
                   }
+                  size_t nextAddressBytes = BITSTREAM_2_ADDRESS(dataStream->position()) >> 3;
+                  logD("DATA JUMP SHORT sourceAddr %d aka %08x nextBytes %d", dataStream->position(), BITSTREAM_2_ADDRESS(dataStream->position()), nextAddressBytes);
+                  nextAddressBytes = nextAddressBytes + relativeAddr;
                   nextAddress = (nextAddressBytes << 3) | shiftAddr;
+                  logD("DATA JUMP SHORT next %08x nextBytes %08x offset %08x", nextAddress, nextAddressBytes, streamDataOffset);
                   nextAddress += streamDataOffset;
-                  logD("DATA JUMP SHORT %08x = %08x|%08x, d = %d to %d - %08x", relativeJump, relativeAddr, shiftAddr, distanceBytes, nextAddressBytes, nextAddress);
-
+                  logD("DATA JUMP SHORT %08x = %08x|%08x to %08x %d", relativeJump, relativeAddr, shiftAddr, nextAddress, nextAddressBytes);
+  
                 }
               } else {
                 size_t index = dataStream->readBits(addressIndexBits);
@@ -2258,14 +2253,11 @@ void DivExportTIAZip::validateBitstreams() {
                   size_t relativeJump = trackStream->readBits(11);
                   size_t shiftAddr = relativeJump & 0x07;
                   size_t relativeAddr = relativeJump >> 3;
-                  size_t isBackward = relativeAddr | 0x80;
-                  size_t distanceBytes = relativeAddr & 0x7f;
-                  size_t nextAddressBytes = BITSTREAM_2_ADDRESS(dataStream->position()) >> 3;
-                  if (isBackward) {
-                    nextAddressBytes -= distanceBytes;
-                  } else {
-                    nextAddressBytes += distanceBytes;
+                  if (relativeAddr | 0x80) {
+                    relativeAddr |= -256;
                   }
+                  size_t nextAddressBytes = BITSTREAM_2_ADDRESS(dataStream->position()) >> 3;
+                  nextAddressBytes = nextAddressBytes + relativeAddr;
                   nextAddress = (nextAddressBytes << 3) | shiftAddr;
                   nextAddress += streamDataOffset;
                 }
@@ -2286,7 +2278,6 @@ void DivExportTIAZip::validateBitstreams() {
               maxAddress = returnAddress;
             }
             logD("seek C");
-            assert(nextAddress < dataStream->size());
             dataStream->seek(ADDRESS_2_BITSTREAM(nextAddress));
             continue;
           }
@@ -2562,19 +2553,19 @@ void DivExportTIAZip::validateCodeSequence(
     if (c == CODE_TAKE_DATA_JUMP) {
         nextReadIndex++;
         AlphaCode c = compressedCodeSequence[nextReadIndex];
-        size_t returnIndex = GET_CODE_JUMP_INDEX(c);
+        size_t jumpIndex = GET_CODE_JUMP_INDEX(c);
         assert(CODE_TYPE::JUMP == GET_CODE_TYPE(c));
-        if (returnIndex >= maxIndex) {
+        if (jumpIndex >= maxIndex) {
           logD("missed force goto back to front");
         }
-        if (returnIndex == returnIndex) {
+        if (jumpIndex == returnIndex) {
           logD("missed force goto back to last");
         }
         returnIndex = nextReadIndex + 1;
         if (returnIndex >= maxIndex) {
           maxIndex = returnIndex;
         }
-        nextReadIndex = returnIndex;
+        nextReadIndex = jumpIndex;
         continue;
 
     } else if (codeType == CODE_TYPE::BRANCH_POINT) {
@@ -2644,7 +2635,7 @@ void DivExportTIAZip::validateCodeSequence(
     } else {
       AlphaCode x = codeSequence[compareIndex];
       if (c != x) {
-        logD("%d %d | %d: %08x    %08x",subsong, channel, nextReadIndex, compressedCodeSequence[nextReadIndex-1], codeSequence[compareIndex-1]);
+        logD("%d %d | %d: %08x    %08x",subsong, channel, nextReadIndex-1, compressedCodeSequence[nextReadIndex-1], codeSequence[compareIndex-1]);
         logD("%d %d | %d: %08x <> %08x (%d)",subsong, channel, nextReadIndex, c, x, compareIndex);
         logD("%d %d | %d: %08x    %08x",subsong, channel, nextReadIndex+1, compressedCodeSequence[nextReadIndex+1], codeSequence[compareIndex+1]);
         assert(false);
