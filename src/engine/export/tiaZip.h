@@ -44,6 +44,7 @@ class DivExportTIAZip : public DivROMExport {
   int compressionLevel;
   int minSpanLength;
   int maxSustain;
+  bool returnFF;
   bool branchPointerOptimization;
   size_t baseDataOffset;
   size_t blockSize;

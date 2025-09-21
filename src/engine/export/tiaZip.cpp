@@ -242,9 +242,10 @@ void DivExportTIAZip::run() {
   minSpanLength = conf.getInt("minSpanLength", 3);
   maxSustain = conf.getInt("maxSustain", 16);
   jumpMapBits = conf.getInt("jumpMapBits", 5);
+  returnFF = conf.getBool("returnFF", true);
   branchPointerOptimization = conf.getBool("bpo", false);
   baseDataOffset = 0xF100;
-  blockSize = 4096 * 8;
+  blockSize = (0x10000 - baseDataOffset) * 8;
   addressBits = 15;
   addressIndexBits = jumpMapBits;
 
@@ -1080,14 +1081,14 @@ void DivExportTIAZip::compressCodeSequence(
         trackSequence[nextSpanIndex] = CODE_RETURN_NOOP;
         logD("rewriting to return last from %d to %d", nextReadIndex-1, returnIndex);
 
-      } else if (jumpIndex == maxIndex) {
+      } else if (returnFF && jumpIndex == maxIndex) {
         trackSequence[nextSpanIndex-1] = CODE_RETURN_FF;
         trackSequence[nextSpanIndex] = CODE_RETURN_NOOP;
         logD("rewriting to return front from %d to %d", nextReadIndex-1, maxIndex);
 
       } else {
+        trackPositionMap[nextSpanIndex] = nextReadIndex; // track jumps do not advance data stream
         returnIndex = nextReadIndex + 1;
-        trackPositionMap[nextSpanIndex] = returnIndex;
         if (returnIndex >= maxIndex) {
           maxIndex = returnIndex;
         }
@@ -1346,6 +1347,8 @@ void DivExportTIAZip::assembleBitstreams()
   }
   SHOW_TREE(velocityFrequencyMap, velocityCodes, 4, 0);
 
+  std::map<JUMP_POINTER_TYPE, size_t> jumpTypeFrequencies;
+
   // assemble bitstreams
   size_t streamDataOffset = (baseDataOffset << 3);
   dataStreams.resize(e->song.subsong.size() * NUM_ZIP_CHANNELS);
@@ -1401,6 +1404,14 @@ void DivExportTIAZip::assembleBitstreams()
         
       dataStreams[subsong * NUM_ZIP_CHANNELS + channel] = dataStream;
 
+      for (size_t i = 0; i < compressedCodeSequence.size(); i++) {
+        AlphaCode code = compressedCodeSequence.at(i);
+        if (GET_CODE_TYPE(code) != CODE_TYPE::JUMP) {
+          continue;
+        }
+        jumpTypeFrequencies[jumpTypeAssignments[i]]++;
+      }
+
       // produce track stream
       logD("encoding track stream for %d %d", subsong, channel);
       auto &trackSequence = trackSequences[subsong * NUM_ZIP_CHANNELS + channel];
@@ -1442,6 +1453,8 @@ void DivExportTIAZip::assembleBitstreams()
 
           auto ij = jumpMap.find(s);
           if (ij != jumpMap.end()) {
+            jumpTypeFrequencies[JUMP_POINTER_TYPE::INDEX]++;
+
             size_t index = (*ij).second;
             logD("SPAN %d %d %08x - JUMP INDEX %08x", subsong, channel, GET_ADDRESS_COMPONENTS(trackStream->position()), index);
             trackStream->writeBit(false); // is lookup
@@ -1457,6 +1470,7 @@ void DivExportTIAZip::assembleBitstreams()
             size_t sourceAddressBytes = sourceAddress >> 3;
             long distanceBytes = targetAddressBytes - sourceAddressBytes;
             if (distanceBytes >= -128 && distanceBytes <= 127) {
+              jumpTypeFrequencies[JUMP_POINTER_TYPE::SHORT]++;
               // short jump
               size_t shiftAddr = targetAddress & 0x07;
               size_t shortJump = ((0xff & distanceBytes) << 3) | shiftAddr;
@@ -1466,6 +1480,7 @@ void DivExportTIAZip::assembleBitstreams()
               trackStream->writeBits(shortJump, 11);
 
             } else {
+              jumpTypeFrequencies[JUMP_POINTER_TYPE::LONG]++;
               // long jump
               logD("SPAN %d %d %08x - JUMP LONG %08x", subsong, channel, GET_ADDRESS_COMPONENTS(trackStream->position()), targetAddress);
               trackStream->writeBit(true); // no lookup
@@ -1475,6 +1490,7 @@ void DivExportTIAZip::assembleBitstreams()
             }
 
           } else {
+            jumpTypeFrequencies[JUMP_POINTER_TYPE::LONG]++;
             size_t address = GET_CODE_JUMP_INDEX(s);
             size_t targetAddress = BITSTREAM_2_ADDRESS(positionMap[address]);
             logD("SPAN %d %d %08x - JUMP LONG %08x", subsong, channel, GET_ADDRESS_COMPONENTS(trackStream->position()), address);
@@ -1506,6 +1522,19 @@ void DivExportTIAZip::assembleBitstreams()
 
     }
   }
+
+  // emit jump type frequencies
+  logD("JUMP TYPE FREQUENCIES");
+  size_t jumpTypebits = 0;
+  size_t shortFreq = jumpTypeFrequencies[JUMP_POINTER_TYPE::SHORT];
+  size_t shortBits = shortFreq * (11 + 2);
+  logD("JUMP SHORT: %d - %d bits", shortFreq, shortBits);
+  size_t indexFreq = jumpTypeFrequencies[JUMP_POINTER_TYPE::INDEX];
+  size_t indexBits = indexFreq * (addressIndexBits + 1);
+  logD("JUMP INDEX: %d - %d bits", indexFreq, indexBits);
+  size_t longFreq = jumpTypeFrequencies[JUMP_POINTER_TYPE::LONG];
+  size_t longBits = longFreq * (addressBits + 2);
+  logD("JUMP LONG: %d - %d bits", longFreq, longBits);
 
   for (size_t subsong = 0; subsong < e->song.subsong.size(); subsong++) {
     for (int channel = 0; channel < NUM_ZIP_CHANNELS; channel += 1) {
@@ -2253,20 +2282,8 @@ void DivExportTIAZip::validateBitstreams() {
               }
 
             } else if (sx == CODE_TAKE_TRACK_JUMP) {
-              // skip datastream pointer first
-              bool isAddress = dataStream->readBit();
-              if (isAddress) {
-                bool isLongJump = branchPointerOptimization ? dataStream->readBit() : true;
-                if (isLongJump) {
-                  dataStream->readBits(addressBits);
-                } else {
-                  dataStream->readBits(11);
-                }
-              } else {
-                dataStream->readBits(addressIndexBits);
-              };
               // now read track 
-              isAddress = trackStream->readBit();
+              bool isAddress = trackStream->readBit();
               if (isAddress) {
                 bool isLongJump = branchPointerOptimization ? trackStream->readBit() : true;
                 if (isLongJump) {
@@ -2293,6 +2310,22 @@ void DivExportTIAZip::validateBitstreams() {
                 size_t index = trackStream->readBits(addressIndexBits);
                 nextAddress = jumpTableAddresses[index];
                 logD("TRACK JUMP INDEX %d -> %08x", index, nextAddress);
+              }
+
+              // BUGBUG
+              // skip datastream pointer to get distance
+              {
+                bool isAddress = dataStream->readBit();
+                if (isAddress) {
+                  bool isLongJump = branchPointerOptimization ? dataStream->readBit() : true;
+                  if (isLongJump) {
+                    dataStream->readBits(addressBits);
+                  } else {
+                    dataStream->readBits(11);
+                  }
+                } else {
+                  dataStream->readBits(addressIndexBits);
+                };
               }
 
             } else {
