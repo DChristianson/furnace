@@ -202,18 +202,20 @@ void HuffmanTree::buildCanonicalCodebook(size_t maxBits, std::vector<CodebookEnt
   logD("computing ranks");
   const size_t NO_RANK = 0xff;
   size_t ranks[maxBits+1];
-  memset(ranks, NO_RANK, maxBits+1);
+  for (int i = 0; i < maxBits+1; i++) {
+    ranks[i] = NO_RANK;
+  }
   size_t currentBits = maxBits;
   for (int p = n; p >= 0; p--) {
-    logD("ranks for %d start at %d", currentBits, p);
     CodebookEntry &entry = codebook.at(p);
     if (entry.height >= currentBits) continue;
     currentBits = entry.height;
     size_t rank = maxBits - currentBits;
-    logD("rank %d for %d found at %d", rank, currentBits, p);
     assert(rank < maxBits + 1);
     ranks[rank] = p;
   }
+
+  // BUGBUG: debugging
 
   logD("recovering bits, need %d", totalWeightToRecover);
   while (totalWeightToRecover > 0) {
@@ -225,7 +227,9 @@ void HuffmanTree::buildCanonicalCodebook(size_t maxBits, std::vector<CodebookEnt
       logD("searching %d: %d, %d", bitsToDecrease, highPos, lowPos);
       if (highPos == NO_RANK) continue;
       if (lowPos == NO_RANK) break;
+      assert(highPos < codebook.size());
       const long highWeight = codebook.at(highPos).weight;
+      assert(lowPos < codebook.size());
       const long lowWeight = 2 * codebook.at(lowPos).weight;
       if (highWeight <= lowWeight) break;
     }
@@ -236,11 +240,15 @@ void HuffmanTree::buildCanonicalCodebook(size_t maxBits, std::vector<CodebookEnt
     if (ranks[bitsToDecrease - 1] == NO_RANK) {
         ranks[bitsToDecrease - 1] = ranks[bitsToDecrease]; 
     }
+    logD("incrementing ranks %d: %d", bitsToDecrease, ranks[bitsToDecrease]);
+    assert(ranks[bitsToDecrease] < codebook.size());
     codebook.at(ranks[bitsToDecrease]).height++;
     if (ranks[bitsToDecrease] == 0) {
       ranks[bitsToDecrease] = NO_RANK;
     } else {
       ranks[bitsToDecrease]--;
+      logD("decrementing ranks %d: %d", bitsToDecrease, ranks[bitsToDecrease]);
+      assert(ranks[bitsToDecrease] < codebook.size());
       if (codebook.at(ranks[bitsToDecrease]).height != maxBits - bitsToDecrease) {
         ranks[bitsToDecrease] = NO_RANK;
       }
@@ -249,14 +257,17 @@ void HuffmanTree::buildCanonicalCodebook(size_t maxBits, std::vector<CodebookEnt
   // handle overshoot
   while (totalWeightToRecover < 0) { 
     if (ranks[1] == NO_RANK) {
+      assert(n < codebook.size());
       while (codebook.at(n).height == maxBits) {
         n--;
       }
+      assert(n < (codebook.size() - 1));
       codebook.at(n+1).height--;
       ranks[1] = (n+1);
       totalWeightToRecover++;
       continue;
     }
+    assert((ranks[1] + 1) < codebook.size() );
     codebook.at(ranks[1] + 1).height--;
     ranks[1]++;
     totalWeightToRecover ++;
@@ -282,6 +293,10 @@ HuffmanTree *buildHuffmanTree(
 
   size_t literalWeight = 0;
   for (auto &x:frequencyMap) {
+    if (x.second == 0) {
+      // token never appears
+      continue;
+    }
     if (x.second < minWeight) {
       literalWeight += 1;
       continue;

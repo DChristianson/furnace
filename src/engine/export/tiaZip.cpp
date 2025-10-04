@@ -139,6 +139,15 @@
 //        - try separate instrument encodings  (YES)
 //        - instrumate ADSR to handle volume? (YES)
 //        - properly analytic span compression analysis? (FAKED IT)
+//        - try to optimize frequency tables
+//          - consider if no table makes sense for some 
+//          - exhaustive clustering combinations?
+//        - try to optimize jump encoding
+//          - can any gotos be eliminated?
+//          - are there branch points where the skip is more / less likely
+//        - try to optimize volume
+//        - consider more adaptive coding
+//        - consider arithmetic encoding somehow?
 //    - compression nits
 //        - double jumps exist
 //        - 0 distance jumps could be skip except for return
@@ -243,7 +252,11 @@ void DivExportTIAZip::run() {
   maxSustain = conf.getInt("maxSustain", 16);
   jumpMapBits = conf.getInt("jumpMapBits", 5);
   returnFF = conf.getBool("returnFF", true);
+  changeControlPredict = conf.getBool("changeControlPredict", true);
+  changeFrequencyPredict = conf.getBool("changeFrequencyPredict", false);
   branchPointerOptimization = conf.getBool("bpo", false);
+  branchWeight = conf.getInt("branchWeight", 13);
+
   baseDataOffset = 0xF100;
   blockSize = (0x10000 - baseDataOffset) * 8;
   addressBits = 15;
@@ -456,7 +469,7 @@ unsigned char GET_CODE_VELOCITY(const AlphaCode c) {
 }
 
 size_t GET_ADDRESS_COMPONENTS(size_t addr) {
-  return ((addr << 1) & 0x3ff0) | (addr & 0x7);
+  return ((addr << 1) & 0xfff0) | (addr & 0x7);
 }
 
 size_t BITSTREAM_2_ADDRESS(size_t address) {
@@ -508,26 +521,24 @@ void SHOW_FREQUENCIES(const std::map<AlphaCode, size_t> &frequencyMap) {
 }
 
 // BUGBUG: STATS
-void SHOW_TREE(
-  const std::map<AlphaCode, size_t> &frequencyMap,
+void SHOW_CODEBOOK(
+  const std::vector<CodebookEntry> &codebook,
   const std::map<AlphaCode, std::vector<bool>> &codeIndex,
   const int unencodedBits,
   AlphaCode defaultCode
 ) {
-  logD("compressed dictionary size: %d", frequencyMap.size());
-  std::vector<std::pair<AlphaCode, size_t>> frequencies(
-    frequencyMap.begin(),
-    frequencyMap.end()
-  );
-  std::sort(
-    frequencies.begin(),
-    frequencies.end(),
-    compareCodeFrequency
-  );
   size_t totalBits = 0;
   size_t totalUnencodedBits = 0;
-  for (auto &x: frequencies) {
-    auto it = codeIndex.find(x.first);
+  size_t currentLength = 0;
+  size_t codeTableEntryCount = 0;
+  size_t firstValueTableEntryCount = 0;
+  size_t lengthTableEntryCount = 0;
+  size_t totalWeight = 0;
+  for (auto &entry : codebook) {
+    if (entry.height == 0) {
+      continue;
+    }
+    auto it = codeIndex.find(entry.code);
     if (it == codeIndex.end()) {
       it = codeIndex.find(defaultCode);
     }
@@ -539,11 +550,34 @@ void SHOW_TREE(
       }
     }
     huffmanCode += ".";
-    totalBits += x.second * bitvec.size();
-    totalUnencodedBits += x.second * unencodedBits;
-    logD("  %08x -> %d (%s) %d", x.first, x.second, huffmanCode, bitvec.size());
+    if (currentLength == 0) {
+      currentLength = entry.height;
+      lengthTableEntryCount++;
+      firstValueTableEntryCount++;
+    } else if (currentLength < entry.height) {
+      firstValueTableEntryCount++;
+      lengthTableEntryCount++;
+      currentLength++;
+      if (currentLength < entry.height) {
+        firstValueTableEntryCount++;
+        lengthTableEntryCount++;
+        currentLength = entry.height;
+      }
+    }
+    codeTableEntryCount++;
+    totalBits += entry.weight * entry.height;
+    totalUnencodedBits += entry.weight * unencodedBits;
+    totalWeight += entry.weight;
+    logD("  %08x -> %d (%s) %d", entry.code, entry.weight, huffmanCode, bitvec.size());
   }
-  logD("  totalBits: %d, unencodedBits: %d", totalBits, totalUnencodedBits);
+  if (currentLength == 6) {
+    lengthTableEntryCount++;
+    firstValueTableEntryCount++;
+  }
+  size_t tableEntryCount = codeTableEntryCount + firstValueTableEntryCount + lengthTableEntryCount;
+  size_t totalTotalBits = totalBits + tableEntryCount * 8;
+  double deltaBytes = ((double) totalUnencodedBits - (double)totalTotalBits) / 8.0;
+  logD(" totalWeight: %d, totalBits: %d, unencodedBits: %d, tableEntries: %d, totalTotalBits: %d, delta: %lf", totalWeight, totalBits, totalUnencodedBits, tableEntryCount, totalTotalBits, deltaBytes);
 }
 
 // compacted encoding
@@ -611,7 +645,7 @@ void DivExportTIAZip::writeTrackDataTIAZip(int compressionLevel, int minSpanLeng
       ChannelState lastChannelState(dumpSequence.initialState);
       for (auto& n: dumpSequence.intervals) { 
         VelocityInterval &currentVelocity = velocityIntervals.back();
-        int velocity = compressionLevel < 2 ? 0 : (int) n.state.registers[2] - (int) lastChannelState.registers[2];
+        int velocity = (compressionLevel < 2 || n.duration > 1) ? 0 : (int) n.state.registers[2] - (int) lastChannelState.registers[2];
         int step = n.duration;
         if (velocity == currentVelocity.velocity && velocity == 0) {
           currentVelocity.duration += n.duration;
@@ -646,7 +680,7 @@ void DivExportTIAZip::writeTrackDataTIAZip(int compressionLevel, int minSpanLeng
           // }
         }
         currentState = n.state;
-        if (effectiveVelocity == -1 || effectiveVelocity == 1) {
+        if (effectiveVelocity != 0 && effectiveVelocity >= -1 && effectiveVelocity <= 1) {
           logD("%d %d ACTIVATING EFFECT BIT", subsong, channel);
           currentState.registers[2] = 0x80 | (effectiveVelocity & 0x0f);
         }
@@ -678,7 +712,6 @@ void DivExportTIAZip::writeTrackDataTIAZip(int compressionLevel, int minSpanLeng
     assert(CODE_TYPE_WEIGHTS.find(type) != CODE_TYPE_WEIGHTS.end());
     alphaCharWeights[index[code]] = CODE_TYPE_WEIGHTS.at(type);
   }
-  const size_t branchWeight = 13;
 
   // debugging: compute basic stats
   // statistics
@@ -1231,121 +1264,47 @@ void DivExportTIAZip::assembleBitstreams()
   SHOW_FREQUENCIES(dataCommandFrequencyMap);
   dataCommandCodeTree = buildHuffmanTree(dataCommandFrequencyMap, maxHuffmanCodes, minWeight, maxBits, CODE_WRITE_REGISTERS_000, dataCommandCodebook);
   dataCommandCodeTree->buildIndex(dataCommandCodes);
-  SHOW_TREE(dataCommandFrequencyMap, dataCommandCodes, 3, CODE_WRITE_REGISTERS_000);
+  SHOW_CODEBOOK(dataCommandCodebook, dataCommandCodes, 3, CODE_WRITE_REGISTERS_000);
 
   logD("span tree");
   logD("span dictionary size: %d", trackCommandFrequencyMap.size());
   SHOW_FREQUENCIES(trackCommandFrequencyMap);
   trackCommandTree = buildHuffmanTree(trackCommandFrequencyMap, maxHuffmanCodes, minWeight, maxBits, 0, trackCommandCodebook);
   trackCommandTree->buildIndex(trackCommandCodes);
-  SHOW_TREE(trackCommandFrequencyMap, trackCommandCodes, 3, 0);
+  SHOW_CODEBOOK(trackCommandCodebook, trackCommandCodes, 3, 0);
 
   logD("control tree");
   controlTree = buildHuffmanTree(controlFrequencyMap, maxHuffmanCodes, minWeight, maxBits, 0, controlCodebook);
   controlTree->buildIndex(controlCodes);
-  SHOW_TREE(controlFrequencyMap, controlCodes, 4, 0);
+  SHOW_CODEBOOK(controlCodebook, controlCodes, 4, 0);
 
-  // merge frequencies  
   logD("merging frequency trees");
-  // controlCodeMergeMap = {
-  //   {0, 0},
-  //   {1, 0},
-  //   {2, 0},
-  //   {3, 0},
-  //   {4, compressionLevel > 1 ? 1 : 0},
-  //   {5, 0},
-  //   {6, compressionLevel > 1 ? 1 : 0},
-  //   {7, 0},
-  //   {8, compressionLevel > 1 ? 2 : 0},
-  //   {9, 0},
-  //   {10, 0},
-  //   {11, 0},
-  //   {12, compressionLevel > 1 ? 1 : 0},
-  //   {13, 0},
-  //   {14, 0},
-  //   {15, compressionLevel > 1 ? 2 : 0},
-  // };
-  controlCodeMergeMap = {
-    {0, 0},
-    {1, 0},
-    {2, 0},
-    {3, compressionLevel > 1 ? 1 : 0},
-    {4, compressionLevel > 1 ? 1 : 0},
-    {5, 0},
-    {6, compressionLevel > 1 ? 1 : 0},
-    {7, 0},
-    {8, 0},
-    {9, 0},
-    {10, 0},
-    {11, 0},
-    {12, compressionLevel > 1 ? 1 : 0},
-    {13, 0},
-    {14, 0},
-    {15, 0},
-  };
-  for (auto &x : initialFrequencyMap) {
-    AlphaCode mergeFrequencyCode = controlCodeMergeMap[x.first];
-    for (auto &f: x.second) {
-      mergedFrequencyMap[mergeFrequencyCode][f.first] += f.second;
-    }
-    String row = "";
-    for (size_t i = 0; i < 31; i++) {
-      row += fmt::sprintf(" %02d", x.second[i]);
-    }
-    logD("F%02d %s", x.first, row);
-  }
-  // std::priority_queue<std::pair<AlphaCode, size_t>, std::vector<std::pair<AlphaCode, size_t>>, CompareFrequencies> frequencyHeap;
-  // // find out most important cx value
-  // for (auto &x: initialFrequencyMap) {
-  //   size_t weight = 0;
-  //   for (auto &f: x.second) {
-  //     weight += f.second;
-  //   }
-  //   logD("pushing frequency audcx %d weight %d", x.first, weight);
-  //   frequencyHeap.emplace(std::pair<AlphaCode, size_t>(x.first, weight));
-  // }
-  // std::map<AlphaCode, std::map<AlphaCode, size_t>> mergedFrequencyMap;
-  // AlphaCode mergedFrequencyCode = 0;
-  // size_t totalWeight = 0;
-  // while (!frequencyHeap.empty()) {
-  //   auto x = frequencyHeap.top();
-  //   frequencyHeap.pop();
-  //   const size_t nextWeight = x.second * 5;
-  //   if (compressionLevel > 1 && totalWeight > 0 && (totalWeight + nextWeight) > 3000) {
-  //     mergedFrequencyCode++;
-  //     totalWeight = 0;
-  //   }
-  //   totalWeight += nextWeight;
-  //   controlCodeMergeMap[x.first] = mergedFrequencyCode;
-  //   for (auto &f: initialFrequencyMap[x.first]) {
-  //     mergedFrequencyMap[mergedFrequencyCode][f.first] += f.second;
-  //   }
-  //   logD("merged frequency tree %d audcx %d weight %d", mergedFrequencyCode, x.first, totalWeight);
-  // }
-
+  computeMergedFrequenciesDefault();
+  //computeMergedFrequenciesDynamic();
+  // build Huffman trees
   for (auto &x: mergedFrequencyMap) {
     logD("merged frequency tree %d", x.first);
     mergedFrequencyTrees[x.first] = buildHuffmanTree(x.second, maxHuffmanCodes, minWeight, maxBits, 0, mergedFrequencyCodebooks[x.first]);
     mergedFrequencyTrees[x.first]->buildIndex(mergedFrequencyCodes[x.first]);
-    SHOW_TREE(x.second, mergedFrequencyCodes[x.first], 9, 0);
+    SHOW_CODEBOOK(mergedFrequencyCodebooks[x.first], mergedFrequencyCodes[x.first], 5, 0);
   }
 
   logD("volume tree");
   volumeTree = buildHuffmanTree(volumeFrequencyMap, maxHuffmanCodes, minWeight, maxBits, 0, volumeCodebook);
   volumeTree->buildIndex(volumeCodes);
-  SHOW_TREE(volumeFrequencyMap, volumeCodes, 4, 0);
+  SHOW_CODEBOOK(volumeCodebook, volumeCodes, 4, 0);
 
   logD("duration tree");
   durationTree = buildHuffmanTree(durationFrequencyMap, maxHuffmanCodes, minWeight, maxBits, 0, durationCodebook);
   durationTree->buildIndex(durationCodes);
-  SHOW_TREE(durationFrequencyMap, durationCodes, 4, 0);
+  SHOW_CODEBOOK(durationCodebook, durationCodes, 4, 0);
 
   logD("velocity tree");
   velocityTree = buildHuffmanTree(velocityFrequencyMap, maxHuffmanCodes, minWeight, maxBits, 0, velocityCodebook);
   if (NULL != velocityTree) {
     velocityTree->buildIndex(velocityCodes);
   }
-  SHOW_TREE(velocityFrequencyMap, velocityCodes, 4, 0);
+  SHOW_CODEBOOK(velocityCodebook, velocityCodes, 4, 0);
 
   std::map<JUMP_POINTER_TYPE, size_t> jumpTypeFrequencies;
 
@@ -1847,6 +1806,13 @@ void DivExportTIAZip::writeBitstreams() {
   totalCompressedBytes += writeCodebookFirstValues(trackData, "audio_decode_control", controlCodebook, controlCodes);
   // totalCompressedBytes += writeCodebookFirstValues(trackData, "audio_decode_frequency", frequencyCodebook, frequencyCodeIndex);
   for (auto &x : mergedFrequencyCodebooks) {
+    logD("writing first values for %d", x.first);
+    // KLUDGE: tryna block low weight low value business
+    if (compressionLevel > 2 && x.first == 0) {
+      logD("short circuit compression level 3+");
+      trackData->writeText("\naudio_decode_control_0_frequency_FIRST_VALUES = 0");
+      continue;
+    }
     totalCompressedBytes += writeCodebookFirstValues(
       trackData,
       fmt::sprintf("audio_decode_control_%d_frequency", x.first).c_str(),
@@ -1905,6 +1871,10 @@ void DivExportTIAZip::writeBitstreams() {
   );
   totalCompressedBytes += writeCodebookLengths(trackData, "audio_decode_control", controlCodebook, codebookTotal);
   for (auto &x : mergedFrequencyCodebooks) {
+    // KLUDGE: tryna block low weight low value business
+    if (compressionLevel > 2 && x.first == 0) {
+      continue;
+    }
     totalCompressedBytes += writeCodebookLengths(
       trackData,
       fmt::sprintf("audio_decode_control_%d_frequency", x.first).c_str(),
@@ -1933,6 +1903,10 @@ void DivExportTIAZip::writeBitstreams() {
   totalCompressedBytes += writeDataCodes(trackData, "audio_decode_control", controlCodebook, controlCodes);
   // totalCompressedBytes += writeDataCodes(trackData, "audio_decode_frequency", frequencyCodebook, frequencyCodeIndex);
   for (auto &x : mergedFrequencyCodebooks) {
+    // KLUDGE: tryna block low weight low value business
+    if (compressionLevel > 2 && x.first == 0) {
+      continue;
+    }
     totalCompressedBytes += writeDataCodes(
       trackData,
       fmt::sprintf("audio_decode_control_%d_frequency", x.first).c_str(),
@@ -1978,15 +1952,30 @@ void DivExportTIAZip::writeBitstreams() {
   } else {
     trackData->writeText("\nCONTROL_FREQUENCY_TABLE");
     for (AlphaCode i = 0; i < 16; i++) {
-      AlphaCode instrumentCode = controlCodeMergeMap[i];
+      AlphaCode instrumentCode = controlCodeMergeMap.at(i);
+      if (mergedFrequencyCodebooks.find(instrumentCode) == mergedFrequencyCodebooks.end()) {
+        instrumentCode = 0;
+      }
       trackData->writeText(fmt::sprintf("\n    byte audio_decode_control_%d_frequency_FIRST_VALUES", instrumentCode));
     }
     trackData->writeText("\n    MAC audio_decode_frequency_MACRO\n");
     trackData->writeText("    ldy audio_channel_cx,x\n");
     trackData->writeText("    lda CONTROL_FREQUENCY_TABLE,y\n");
+    if (compressionLevel > 2) {
+      trackData->writeText("    beq ._audio_decode_frequency_literal\n");
+    }
     trackData->writeText("    tay\n");
     trackData->writeText("    ldx audio_data_stream_idx\n");
     trackData->writeText("    jsr audio_stream_read_symbol\n");
+    if (compressionLevel > 2) {
+    trackData->writeText("    bpl ._audio_decode_frequency_save_fx ; always true\n");
+      trackData->writeText("._audio_decode_frequency_literal\n");
+      trackData->writeText("    ldy #%11110000\n");
+      trackData->writeText("    jsr read_symbol_y\n");
+      trackData->writeText("    ldx audio_channel_idx\n");
+      trackData->writeText("._audio_decode_frequency_save_fx\n");
+    }
+
     trackData->writeText("    ENDM\n\n");
   }
   writeCodebookMacro(trackData, "audio_decode_volume", "audio_data_stream_idx", volumeCodebook);
@@ -2032,10 +2021,9 @@ void DivExportTIAZip::validateBitstreams() {
       AlphaCode lastCommand = 0;
       while (dataStream->hasBits()) {
         size_t streamPosition = dataStream->position();
-        logD("NEXT %d", streamPosition);
+        logD("AT datastream=%08x trackstream=%08x", GET_ADDRESS_COMPONENTS(streamPosition), GET_ADDRESS_COMPONENTS(trackStream->position()));
         AlphaCode code;
         AlphaCode nextCommand = dataCommandCodeTree->decode(dataStream);
-        logD("NEXT %d - %d", streamPosition, dataStream->position());
         if (lastCommand == CODE_BRANCH_POINT && nextCommand == CODE_BRANCH_POINT) {
           logD("SPAN: double branch point at %08x", streamPosition);
         }
@@ -2164,7 +2152,6 @@ void DivExportTIAZip::validateBitstreams() {
               logD("DATA JUMP INDEX %d -> %08x", index, nextAddress);
             }
           
-            // BUGBUG: ADJUST HERE
             nextAddress -= streamDataOffset;
             returnAddress = BITSTREAM_2_ADDRESS(dataStream->position());
             if (maxAddress < returnAddress) {
@@ -2312,7 +2299,6 @@ void DivExportTIAZip::validateBitstreams() {
                 logD("TRACK JUMP INDEX %d -> %08x", index, nextAddress);
               }
 
-              // BUGBUG
               // skip datastream pointer to get distance
               {
                 bool isAddress = dataStream->readBit();
@@ -2333,7 +2319,6 @@ void DivExportTIAZip::validateBitstreams() {
               assert(false);
             }
 
-            // BUGBUG: ADJUST HERE
             nextAddress -= streamDataOffset;
             returnAddress = BITSTREAM_2_ADDRESS(dataStream->position());
             if (maxAddress < returnAddress) {
@@ -2360,6 +2345,139 @@ void DivExportTIAZip::validateBitstreams() {
 
       streamDataOffset += (dataStream->bytesUsed() << 3);
     }
+  }
+}
+
+void DivExportTIAZip::computeMergedFrequenciesDefault() {
+  for (size_t i = 0; i < 16; i++) {
+    controlCodeMergeMap[i] = 0;
+  }
+  if (compressionLevel == 3) {
+    controlCodeMergeMap = {
+      {0, 0},
+      {1, 0},
+      {2, 0},
+      {3, 2},
+      {4, 2},
+      {5, 0},
+      {6, 0},
+      {7, 0},
+      {8, 1},
+      {9, 0},
+      {10, 0},
+      {11, 0},
+      {12, 3},
+      {13, 0},
+      {14, 0},
+      {15, 0}
+    };
+  } else if (compressionLevel == 2) {
+    controlCodeMergeMap = {
+      {0, 0},
+      {1, 0},
+      {2, 0},
+      {3, 1},
+      {4, 1},
+      {5, 0},
+      {6, 1},
+      {7, 0},
+      {8, 0},
+      {9, 0},
+      {10, 0},
+      {11, 0},
+      {12, 1},
+      {13, 0},
+      {14, 0},
+      {15, 0}
+    };
+  }
+  for (auto &x : initialFrequencyMap) {
+    AlphaCode mergeFrequencyCode = controlCodeMergeMap[x.first];
+    for (auto &f: x.second) {
+      mergedFrequencyMap[mergeFrequencyCode][f.first] += f.second;
+    }
+    String row = "";
+    for (size_t i = 0; i < 31; i++) {
+      row += fmt::sprintf(" %02d", x.second[i]);
+    }
+    logD("F%02d %03d %s", x.first, mergeFrequencyCode, row);
+  }
+  if (compressionLevel > 2) {
+    size_t nodeLimit = 32; 
+    for (size_t i = 0; i < nodeLimit; i++) {
+      mergedFrequencyMap[0][i] = 1;
+    }
+  }
+}
+
+void DivExportTIAZip::computeMergedFrequenciesDynamic() {
+
+  // weights
+  std::map<AlphaCode, double> controlCodeWeights;
+  std::priority_queue<std::pair<AlphaCode, size_t>, std::vector<std::pair<AlphaCode, size_t>>, CompareFrequencies> frequencyHeap;
+  for (auto &x: initialFrequencyMap) {
+    // compute total weight
+    size_t weight = 0;
+    for (auto &f: x.second) {
+      weight += f.second;
+    }
+
+    logD("pushing frequency audcx %d weight %d", x.first, weight);
+    controlCodeWeights[x.first] = weight;
+    frequencyHeap.emplace(std::pair<AlphaCode, size_t>(x.first, weight));
+  }
+
+  String header = "       ";
+  for (auto& c : controlCodeWeights) {
+    header += fmt::sprintf("   F%02d", c.first);
+  } 
+  logD(header.c_str());
+
+  // clusters
+  String indent = "     ";
+  for (auto ix = initialFrequencyMap.begin(); ix != initialFrequencyMap.end(); ix++) {
+    auto& a = ix->second;
+    String row = indent;
+    double aTotalWeight = controlCodeWeights[ix->first];
+    for (auto iy = ix; iy != initialFrequencyMap.end(); iy++) {
+      auto& b = iy->second;
+      double bTotalWeight = controlCodeWeights[iy->first];
+      double chi = 0;
+      for (auto& c : controlCodeWeights) {
+        double weightA = ((double)a[c.first]) / aTotalWeight;
+        double weightB = ((double)b[c.first]) / bTotalWeight;
+        double weightC = weightA - weightB;
+        chi += weightC * weightC;
+      }
+      row += fmt::sprintf(" %.3lf", chi);
+    }
+    logD("F%02d %s", ix->first, row);
+    indent += "      ";
+  }
+  AlphaCode mergedFrequencyCode = 0;
+  size_t totalWeight = 0;
+  while (!frequencyHeap.empty()) {
+    auto x = frequencyHeap.top();
+    frequencyHeap.pop();
+    const size_t nextWeight = x.second;
+    if (compressionLevel > 1 && totalWeight > 0 && (totalWeight + nextWeight) > 100) {
+      mergedFrequencyCode++;
+      totalWeight = 0;
+    }
+    totalWeight += nextWeight;
+    controlCodeMergeMap[x.first] = mergedFrequencyCode;
+    logD("merged frequency tree %d audcx %d weight %d", mergedFrequencyCode, x.first, totalWeight);
+  }
+  for (auto &x : initialFrequencyMap) {
+    AlphaCode mergeFrequencyCode = controlCodeMergeMap[x.first];
+    for (auto &f: x.second) {
+      mergedFrequencyMap[mergeFrequencyCode][f.first] += f.second;
+    }
+    String row = "";
+    for (size_t i = 0; i < 31; i++) {
+      row += fmt::sprintf(" %02d", x.second[i]);
+    }
+    logD("F%02d %03d %s", x.first, mergeFrequencyCode, row);
   }
 }
 
@@ -2744,13 +2862,13 @@ size_t DivExportTIAZip::encodeChannelStateCodes(
   unsigned char dx = 1; // framecount > 2 ? 2 : framecount;
 
   // BUGBUG: this is also important, seldom make control changes by themselves
-  if (cc > 0) {
+  if (changeControlPredict && cc > 0) {
     // fc = CHANGE_STATE::CHANGE;
     fc = vc = CHANGE_STATE::CHANGE;
   };
-  // if (fc > 0) {
-  //   vc = CHANGE_STATE::CHANGE;
-  // }
+  if (changeFrequencyPredict && fc > 0) {
+    vc = CHANGE_STATE::CHANGE;
+  }
 
   size_t codesWritten = 0;
   // BUGBUG: PAUSE problematic 

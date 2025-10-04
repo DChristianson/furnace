@@ -50,6 +50,9 @@ class DivExportTIAZip : public DivROMExport {
   size_t blockSize;
   int addressBits;
   int addressIndexBits;
+  bool changeControlPredict;
+  bool changeFrequencyPredict;
+  size_t branchWeight;
 
   // assembly area 
 
@@ -140,7 +143,8 @@ class DivExportTIAZip : public DivROMExport {
     const std::vector<AlphaCode> &trackSequence
   );
 
-
+  void computeMergedFrequenciesDefault();
+  void computeMergedFrequenciesDynamic();
   void assembleBitstreams();
 
   Bitstream * assembleDatastream(

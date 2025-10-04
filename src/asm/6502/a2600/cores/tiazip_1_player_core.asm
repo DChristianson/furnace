@@ -129,8 +129,6 @@ _audio_update_loopback:
             sta audio_data_stream_idx
             lda SPAN_IDX,x
             sta audio_span_stream_idx
-            lda audio_timer,x
-            beq _audio_update_next_command
             dec audio_timer,x
             bpl _audio_update_next_channel
 _audio_update_next_command
@@ -295,32 +293,30 @@ audio_decode_frequency
 
 _symbol_read_next_bit_shift
             iny
-            lda CODEBOOK_LENGTHS,y
-            bne _symbol_read_next_bit_skip
+            ror ; should restore value
+            cmp CODEBOOK_LENGTHS,y
+            bcs _symbol_read_next_bit
             iny
-_symbol_read_next_bit_skip
-            pla
             byte $2c
 audio_stream_read_symbol:
             lda #1
 _symbol_read_next_bit
             READ_BIT_SAVE_ACC
             rol 
-            bmi _symbol_read_symbol
             cmp CODEBOOK_FIRST_VALUES,y
             bcc _symbol_read_next_bit
-            pha
             asl
+            bcs _symbol_read_symbol
             cmp CODEBOOK_FIRST_VALUES+1,y
             bcs _symbol_read_next_bit_shift
-            pla
 _symbol_read_symbol
+            ror  ; should restore value and clear carry
             adc CODEBOOK_LENGTHS,y
             sec
             sbc CODEBOOK_FIRST_VALUES,y
             tay
-            lda CODEBOOK_CODES,y
             ldx audio_channel_idx
+            lda CODEBOOK_CODES,y
             rts
 
 audio_data_stream_save_return
