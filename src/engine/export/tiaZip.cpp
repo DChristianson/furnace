@@ -1960,22 +1960,24 @@ void DivExportTIAZip::writeBitstreams() {
     }
     trackData->writeText("\n    MAC audio_decode_frequency_MACRO\n");
     trackData->writeText("    ldy audio_channel_cx,x\n");
+    trackData->writeText("    ldx audio_data_stream_idx\n");
     trackData->writeText("    lda CONTROL_FREQUENCY_TABLE,y\n");
     if (compressionLevel > 2) {
       trackData->writeText("    beq ._audio_decode_frequency_literal\n");
     }
     trackData->writeText("    tay\n");
-    trackData->writeText("    ldx audio_data_stream_idx\n");
     trackData->writeText("    jsr audio_stream_read_symbol\n");
     if (compressionLevel > 2) {
-    trackData->writeText("    bpl ._audio_decode_frequency_save_fx ; always true\n");
+      trackData->writeText("    bpl ._audio_decode_frequency_save_fx ; always true\n");
       trackData->writeText("._audio_decode_frequency_literal\n");
+      trackData->writeText("    lda audio_stream_buf,x\n");
       trackData->writeText("    ldy #%11110000\n");
       trackData->writeText("    jsr read_symbol_y\n");
+      trackData->writeText("    sta audio_stream_buf,x\n");
+      trackData->writeText("    lda symbol\n");
       trackData->writeText("    ldx audio_channel_idx\n");
       trackData->writeText("._audio_decode_frequency_save_fx\n");
     }
-
     trackData->writeText("    ENDM\n\n");
   }
   writeCodebookMacro(trackData, "audio_decode_volume", "audio_data_stream_idx", volumeCodebook);
