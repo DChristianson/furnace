@@ -1974,7 +1974,7 @@ void DivExportTIAZip::writeBitstreams() {
       trackData->writeText("    ldy #%11110000\n");
       trackData->writeText("    jsr read_symbol_y\n");
       trackData->writeText("    sta audio_stream_buf,x\n");
-      trackData->writeText("    lda symbol\n");
+      trackData->writeText("    tya\n");
       trackData->writeText("    ldx audio_channel_idx\n");
       trackData->writeText("._audio_decode_frequency_save_fx\n");
     }

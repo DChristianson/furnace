@@ -150,7 +150,7 @@ vis_title_end       ds 1
 
     .align 256
 
-        AUDIO_UPDATE
+    AUDIO_UPDATE
 
 
   END_BANK

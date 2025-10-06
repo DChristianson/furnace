@@ -2,7 +2,7 @@
 
 audio_track           ds 1
 
-audio_channel_idx     ds 1
+audio_channel_idx     ds 1  ; BUGBUG maybe can remove?
 audio_data_stream_idx ds 1
 audio_span_stream_idx ds 1
 
@@ -32,6 +32,7 @@ audio_span_1_buf      ds 1 ; channel 1 span stream
 command_ptr
 command_ptr_lo
 symbol                ds 1
+audio_stream_skip
 command_ptr_hi        ds 1
 
 audio_data_last_ptr
@@ -106,8 +107,6 @@ _audio_play_pointer_copy
             sta audio_data_1_buf
             sta audio_vx
             sta audio_vx+1
-            lda #>CODE_WRITE_REGISTERS_111
-            sta command_ptr_hi
             rts
     ENDM
 
@@ -129,11 +128,11 @@ _audio_update_loopback:
             sta audio_data_stream_idx
             lda SPAN_IDX,x
             sta audio_span_stream_idx
-            lda audio_timer,x
-            beq _audio_update_next_command
             dec audio_timer,x
             bpl _audio_update_next_channel
 _audio_update_next_command
+            lda #>CODE_WRITE_REGISTERS_111
+            sta command_ptr_hi
             audio_decode_command_MACRO
             sta command_ptr_lo
             jmp (command_ptr)
@@ -194,30 +193,20 @@ CODE_RETURN_LAST:
 _audio_return_return
             sta audio_stream_buf,x
             ; intentional fallthrough
-CODE_SKIP:
-            lda audio_stream_buf,x
-            jsr read_bit_acc
-            ldy #(ADDRESS_INDEX_BITS - 1)
-            bcc ._audio_skip_bits
-            jsr read_bit_acc
-            ldy #(11 - 1)
-            bcc ._audio_skip_bits
-            ldy #(ADDRESS_BITS - 1)
-._audio_skip_bits
-            READ_BIT_NO_SAVE_BUF
-            dey
-            bpl ._audio_skip_bits
-            sta audio_stream_buf,x
-            jmp _audio_update_next_command 
-
+CODE_SKIP:  
+            lda #1
+            bpl _audio_stream_save_skip_jsr ; should be true
 CODE_TAKE_TRACK_JUMP:
             jsr audio_data_stream_save_return
             ldx audio_span_stream_idx
-            bpl _audio_stream_read_skip_jsr ; should be trie
+            bpl _audio_stream_read_skip_jsr ; should be true
 CODE_TAKE_DATA_JUMP:
             ldx audio_data_stream_idx
             jsr audio_data_stream_save_return
 _audio_stream_read_skip_jsr
+            lda #0
+_audio_stream_save_skip_jsr
+            sta audio_stream_skip
             ; jump to a location on the data stream
             ; 15 bits of address coords on stack
             ;  hhhhlll lllllsss - h = high bits, l = low bits, s = shift
@@ -227,7 +216,6 @@ _audio_stream_read_skip_jsr
             ldy #%11110000
             jsr read_symbol_y
             sta audio_stream_buf,x
-            ldy symbol
             lda AUDIO_JUMP_TABLE_LO_START,y
             sta audio_stream_next_addr_lo
             lda AUDIO_JUMP_TABLE_HI_START,y
@@ -258,6 +246,8 @@ _audio_stream_read_short
             sty audio_stream_next_addr_buf
             sta audio_stream_buf,x          ; store stream buf in case we are doing a track jump
 _audio_stream_read_return
+            lda audio_stream_skip
+            bne _audio_skip_return
             ldx audio_data_stream_idx
             ldy audio_stream_next_addr_hi
             bne _audio_jump_long
@@ -290,7 +280,7 @@ _audio_do_shift_loop
 _audio_end_shift_loop
 _audio_skip_shift
             sta audio_stream_buf,x
-            ldx audio_channel_idx
+_audio_skip_return
             jmp _audio_update_next_command   
 
 SPAN_IDX
