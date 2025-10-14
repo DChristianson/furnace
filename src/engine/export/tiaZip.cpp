@@ -1278,6 +1278,25 @@ void DivExportTIAZip::assembleBitstreams()
   controlTree->buildIndex(controlCodes);
   SHOW_CODEBOOK(controlCodebook, controlCodes, 4, 0);
 
+  logD("jump type tree");
+  if (branchPointerOptimization) {
+    jumpTypeFrequencyMap =  {
+      {JUMP_POINTER_TYPE::SHORT, 200},
+      {JUMP_POINTER_TYPE::INDEX, 100},
+      {JUMP_POINTER_TYPE::LONG, 50}
+    };
+  } else {
+    jumpTypeFrequencyMap = {
+      {JUMP_POINTER_TYPE::INDEX, 100},
+      {JUMP_POINTER_TYPE::LONG, 100}
+    };
+  }
+  logD("jump type dictionary size: %d", jumpTypeFrequencyMap.size());
+  SHOW_FREQUENCIES(jumpTypeFrequencyMap);
+  jumpTypeCodeTree = buildHuffmanTree(jumpTypeFrequencyMap, maxHuffmanCodes, minWeight, maxBits, 0, jumpTypeCodebook);
+  jumpTypeCodeTree->buildIndex(jumpTypeCodes);
+  SHOW_CODEBOOK(jumpTypeCodebook, jumpTypeCodes, 2, 0);
+
   logD("merging frequency trees");
   computeMergedFrequenciesDefault();
   //computeMergedFrequenciesDynamic();
@@ -1416,7 +1435,7 @@ void DivExportTIAZip::assembleBitstreams()
 
             size_t index = (*ij).second;
             logD("SPAN %d %d %08x - JUMP INDEX %08x", subsong, channel, GET_ADDRESS_COMPONENTS(trackStream->position()), index);
-            trackStream->writeBit(false); // is lookup
+            trackStream->writeBits(jumpTypeCodes.at(JUMP_POINTER_TYPE::INDEX));
             trackStream->writeBits(index, addressIndexBits);
 
           } else if (branchPointerOptimization) {
@@ -1434,16 +1453,14 @@ void DivExportTIAZip::assembleBitstreams()
               size_t shiftAddr = targetAddress & 0x07;
               size_t shortJump = ((0xff & distanceBytes) << 3) | shiftAddr;
               logD("SPAN %d %d %08x - JUMP SHORT data stream %d -> %d source %08x -> target %08x (distance %d) code %08x", subsong, channel, GET_ADDRESS_COMPONENTS(trackStream->position()), sourcePosition, targetPosition, sourceAddress, targetAddress, distanceBytes, shortJump);
-              trackStream->writeBit(true); // no lookup
-              trackStream->writeBit(false); // short
+              trackStream->writeBits(jumpTypeCodes.at(JUMP_POINTER_TYPE::SHORT));
               trackStream->writeBits(shortJump, 11);
 
             } else {
               jumpTypeFrequencies[JUMP_POINTER_TYPE::LONG]++;
               // long jump
               logD("SPAN %d %d %08x - JUMP LONG %08x", subsong, channel, GET_ADDRESS_COMPONENTS(trackStream->position()), targetAddress);
-              trackStream->writeBit(true); // no lookup
-              trackStream->writeBit(true); // long
+              trackStream->writeBits(jumpTypeCodes.at(JUMP_POINTER_TYPE::LONG));
               trackStream->writeBits(targetAddress, addressBits);
 
             }
@@ -1453,7 +1470,7 @@ void DivExportTIAZip::assembleBitstreams()
             size_t address = GET_CODE_JUMP_INDEX(s);
             size_t targetAddress = BITSTREAM_2_ADDRESS(positionMap[address]);
             logD("SPAN %d %d %08x - JUMP LONG %08x", subsong, channel, GET_ADDRESS_COMPONENTS(trackStream->position()), address);
-            trackStream->writeBit(true); // no lookup
+            trackStream->writeBits(jumpTypeCodes.at(JUMP_POINTER_TYPE::LONG));
             trackStream->writeBits(targetAddress, addressBits);
 
           }
@@ -1614,7 +1631,7 @@ Bitstream * DivExportTIAZip::assembleDatastream(
           case JUMP_POINTER_TYPE::INDEX: {
             size_t index = jumpMap.at(c);
             logD("DATA %d@%08x - JUMP INDEX %d", i, GET_ADDRESS_COMPONENTS(dataStream->position()), index);
-            dataStream->writeBit(false); // is lookup
+            dataStream->writeBits(jumpTypeCodes.at(JUMP_POINTER_TYPE::INDEX));
             dataStream->writeBits(index, addressIndexBits);
             break;
           }
@@ -1622,10 +1639,7 @@ Bitstream * DivExportTIAZip::assembleDatastream(
           case JUMP_POINTER_TYPE::LONG: {
             size_t targetAddress = GET_CODE_JUMP_INDEX(c);
             logD("DATA %d@%08x - JUMP LONG %08x", i, GET_ADDRESS_COMPONENTS(dataStream->position()), targetAddress);
-            dataStream->writeBit(true); // no lookup
-            if (branchPointerOptimization) {
-              dataStream->writeBit(true); // long pointer
-            }
+            dataStream->writeBits(jumpTypeCodes.at(JUMP_POINTER_TYPE::LONG));
             jumpRevisionMap[dataStream->position()] = std::pair<size_t, size_t>(i, targetAddress);
             dataStream->writeBits(targetAddress, addressBits);
             break;
@@ -1634,8 +1648,7 @@ Bitstream * DivExportTIAZip::assembleDatastream(
           case JUMP_POINTER_TYPE::SHORT: {
             size_t targetIndex = GET_CODE_JUMP_INDEX(c);
             logD("DATA %d@%08x - JUMP SHORT %08x", i, GET_ADDRESS_COMPONENTS(dataStream->position()), targetIndex);
-            dataStream->writeBit(true); // no lookup
-            dataStream->writeBit(false); // short
+            dataStream->writeBits(jumpTypeCodes.at(JUMP_POINTER_TYPE::SHORT));
             jumpRevisionMap[dataStream->position()] = std::pair<size_t, size_t>(i, targetIndex);
             dataStream->writeBits(targetIndex, 11);
             break;
@@ -1823,6 +1836,7 @@ void DivExportTIAZip::writeBitstreams() {
   totalCompressedBytes += writeCodebookFirstValues(trackData, "audio_decode_volume", volumeCodebook, volumeCodes);
   totalCompressedBytes += writeCodebookFirstValues(trackData, "audio_decode_duration", durationCodebook, durationCodes);
   totalCompressedBytes += writeCodebookFirstValues(trackData, "audio_decode_velocity", velocityCodebook, velocityCodes);
+  totalCompressedBytes += writeCodebookFirstValues(trackData, "audio_decode_jump", jumpTypeCodebook, jumpTypeCodes);
 
   // BUGBUG: disable
   // // write control and decoder tables
@@ -1885,6 +1899,7 @@ void DivExportTIAZip::writeBitstreams() {
   totalCompressedBytes += writeCodebookLengths(trackData, "audio_decode_volume", volumeCodebook, codebookTotal);
   totalCompressedBytes += writeCodebookLengths(trackData, "audio_decode_duration", durationCodebook, codebookTotal);
   totalCompressedBytes += writeCodebookLengths(trackData, "audio_decode_velocity", velocityCodebook, codebookTotal);
+  totalCompressedBytes += writeCodebookLengths(trackData, "audio_decode_jump", jumpTypeCodebook, codebookTotal);
 
   // codes
   trackData->writeText(fmt::sprintf("\nCODEBOOK_CODES"));
@@ -1917,6 +1932,7 @@ void DivExportTIAZip::writeBitstreams() {
   totalCompressedBytes += writeDataCodes(trackData, "audio_decode_volume", volumeCodebook, volumeCodes);
   totalCompressedBytes += writeDataCodes(trackData, "audio_decode_duration", durationCodebook, durationCodes);
   totalCompressedBytes += writeDataCodes(trackData, "audio_decode_velocity", velocityCodebook, velocityCodes);
+  totalCompressedBytes += writeJumpCodes(trackData, "audio_decode_jump", jumpTypeCodebook, jumpTypeCodes);
 
   // macros
   writeCodebookMacro(
@@ -1975,7 +1991,6 @@ void DivExportTIAZip::writeBitstreams() {
       trackData->writeText("    jsr read_symbol_y\n");
       trackData->writeText("    sta audio_stream_buf,x\n");
       trackData->writeText("    tya\n");
-      trackData->writeText("    ldx audio_channel_idx\n");
       trackData->writeText("._audio_decode_frequency_save_fx\n");
     }
     trackData->writeText("    ENDM\n\n");
@@ -1992,7 +2007,7 @@ void DivExportTIAZip::writeBitstreams() {
   }
   size_t totalTrackSequenceSize = 0;
   for (auto &x : trackSequences) {
-    totalTrackSequenceSize += trackSequences.size();
+    totalTrackSequenceSize += x.size();
   }
 
   trackData->writeText(fmt::sprintf("; Compressed Code Sequence Length: %d\n", totalCompressedCodeSequenceSize));
@@ -2124,14 +2139,14 @@ void DivExportTIAZip::validateBitstreams() {
           case CODE_TAKE_DATA_JUMP: {
             // get address
             size_t nextAddress;
-            bool isAddress = dataStream->readBit();
-
-            if (isAddress) {
-              bool isLongJump = branchPointerOptimization ? dataStream->readBit() : true;
-              if (isLongJump) {
-                logD("DATA JUMP LONG");
+            switch(jumpTypeCodeTree->decode(dataStream)) {
+              case JUMP_POINTER_TYPE::LONG:
+                logD("DATA JUMP LONG"); {
                 nextAddress = dataStream->readBits(addressBits);
-              } else {
+                break;
+              }
+
+              case JUMP_POINTER_TYPE::SHORT: {
                 logD("DATA JUMP SHORT from %08x", BITSTREAM_2_ADDRESS(dataStream->position()));
                 // relative
                 size_t relativeJump = dataStream->readBits(11);
@@ -2146,12 +2161,15 @@ void DivExportTIAZip::validateBitstreams() {
                 logD("DATA JUMP SHORT next %08x nextBytes %08x offset %08x", nextAddress, nextAddressBytes, streamDataOffset);
                 nextAddress += streamDataOffset;
                 logD("DATA JUMP SHORT %08x =  rel|shift %08x|%08x to next %08x", relativeJump, relativeAddr, shiftAddr, nextAddress);
-
+                break;
               }
-            } else {
-              size_t index = dataStream->readBits(addressIndexBits);
-              nextAddress = jumpTableAddresses[index];
-              logD("DATA JUMP INDEX %d -> %08x", index, nextAddress);
+
+              case JUMP_POINTER_TYPE::INDEX: {
+                size_t index = dataStream->readBits(addressIndexBits);
+                nextAddress = jumpTableAddresses[index];
+                logD("DATA JUMP INDEX %d -> %08x", index, nextAddress);
+                break;
+              }
             }
           
             nextAddress -= streamDataOffset;
@@ -2224,30 +2242,33 @@ void DivExportTIAZip::validateBitstreams() {
               
             } else if (sx == CODE_SKIP) {
               // skip next datastream address
-              bool isAddress = dataStream->readBit();
-              if (isAddress) {
-                bool isLongJump = branchPointerOptimization ? dataStream->readBit() : true;
-                if (isLongJump) {
+              switch(jumpTypeCodeTree->decode(dataStream)) {
+                case JUMP_POINTER_TYPE::LONG:
                   logD("SKIP LONG");
                   dataStream->readBits(addressBits);
-                } else {
+                  break;
+                case JUMP_POINTER_TYPE::SHORT:
                   logD("SKIP SHORT");
                   dataStream->readBits(11);
-                }
-              } else {
-                logD("SKIP INDEX");
-                dataStream->readBits(addressIndexBits);
+                  break;
+                case JUMP_POINTER_TYPE::INDEX:
+                  logD("SKIP INDEX");
+                  dataStream->readBits(addressIndexBits);
+                  break;
               };
               continue;
 
             } else if (sx == CODE_TAKE_DATA_JUMP ) {
-              bool isAddress = dataStream->readBit();
-              if (isAddress) {
-                bool isLongJump = branchPointerOptimization ? dataStream->readBit() : true;
-                if (isLongJump) {
+
+              switch(jumpTypeCodeTree->decode(dataStream)) {
+
+                case JUMP_POINTER_TYPE::LONG: {
                   logD("DATA JUMP LONG");
                   nextAddress = dataStream->readBits(addressBits);
-                } else {
+                  break;
+                }
+
+                case JUMP_POINTER_TYPE::SHORT: {
                   logD("DATA JUMP SHORT from %08x", BITSTREAM_2_ADDRESS(dataStream->position()));
                   // relative
                   size_t relativeJump = dataStream->readBits(11);
@@ -2263,22 +2284,28 @@ void DivExportTIAZip::validateBitstreams() {
                   logD("DATA JUMP SHORT next %08x nextBytes %08x offset %08x", nextAddress, nextAddressBytes, streamDataOffset);
                   nextAddress += streamDataOffset;
                   logD("DATA JUMP SHORT %08x = %08x|%08x to %08x %d", relativeJump, relativeAddr, shiftAddr, nextAddress, nextAddressBytes);
+                  break;
                 }
-              } else {
-                size_t index = dataStream->readBits(addressIndexBits);
-                nextAddress = jumpTableAddresses[index];
-                logD("DATA JUMP INDEX %d -> %08x", index, nextAddress);
-              }
+
+                case JUMP_POINTER_TYPE::INDEX: {
+                  size_t index = dataStream->readBits(addressIndexBits);
+                  nextAddress = jumpTableAddresses[index];
+                  logD("DATA JUMP INDEX %d -> %08x", index, nextAddress);
+                  break;
+                }
+              };
 
             } else if (sx == CODE_TAKE_TRACK_JUMP) {
               // now read track 
-              bool isAddress = trackStream->readBit();
-              if (isAddress) {
-                bool isLongJump = branchPointerOptimization ? trackStream->readBit() : true;
-                if (isLongJump) {
+              switch(jumpTypeCodeTree->decode(trackStream)) {
+
+                case JUMP_POINTER_TYPE::LONG: {
                   logD("TRACK JUMP LONG");
                   nextAddress = trackStream->readBits(addressBits);
-                } else {
+                  break;
+                }
+
+                case JUMP_POINTER_TYPE::SHORT: {
                   logD("TRACK JUMP SHORT from %08x", BITSTREAM_2_ADDRESS(dataStream->position()));
                   // relative
                   size_t relativeJump = trackStream->readBits(11);
@@ -2294,27 +2321,32 @@ void DivExportTIAZip::validateBitstreams() {
                   logD("TRACK JUMP SHORT next %08x nextBytes %08x offset %08x", nextAddress, nextAddressBytes, streamDataOffset);
                   nextAddress += streamDataOffset;
                   logD("TRACK JUMP SHORT %08x = %08x|%08x to %08x %d", relativeJump, relativeAddr, shiftAddr, nextAddress, nextAddressBytes);
+                  break;
                 }
-              } else {
-                size_t index = trackStream->readBits(addressIndexBits);
-                nextAddress = jumpTableAddresses[index];
-                logD("TRACK JUMP INDEX %d -> %08x", index, nextAddress);
-              }
+
+                case JUMP_POINTER_TYPE::INDEX: {
+                  size_t index = trackStream->readBits(addressIndexBits);
+                  nextAddress = jumpTableAddresses[index];
+                  logD("TRACK JUMP INDEX %d -> %08x", index, nextAddress);
+                  break;
+                }
+              };
 
               // skip datastream pointer to get distance
-              {
-                bool isAddress = dataStream->readBit();
-                if (isAddress) {
-                  bool isLongJump = branchPointerOptimization ? dataStream->readBit() : true;
-                  if (isLongJump) {
-                    dataStream->readBits(addressBits);
-                  } else {
-                    dataStream->readBits(11);
-                  }
-                } else {
+              switch(jumpTypeCodeTree->decode(dataStream)) {
+                case JUMP_POINTER_TYPE::LONG:
+                  logD("SKIP LONG");
+                  dataStream->readBits(addressBits);
+                  break;
+                case JUMP_POINTER_TYPE::SHORT:
+                  logD("SKIP SHORT");
+                  dataStream->readBits(11);
+                  break;
+                case JUMP_POINTER_TYPE::INDEX:
+                  logD("SKIP INDEX");
                   dataStream->readBits(addressIndexBits);
-                };
-              }
+                  break;
+              };
 
             } else {
               // should not happen
@@ -2660,6 +2692,42 @@ size_t DivExportTIAZip::writeCommandCodes(
       } else {
         assert(false);
       }
+    } else {
+      assert(false);
+    }
+    bytesWritten +=1;
+  }
+  return bytesWritten;
+}
+
+size_t DivExportTIAZip::writeJumpCodes(
+  SafeWriter *w,
+  const char *label,
+  const std::vector<CodebookEntry> &codebook,
+  const std::map<AlphaCode, std::vector<bool>> &codeIndex
+) {
+  size_t bytesWritten = 0;  
+  w->writeText(fmt::sprintf("\n%s_CODES = . - CODEBOOK_CODES", label));
+  for (auto &entry : codebook) {
+    if (entry.height == 0) {
+      continue;
+    }
+    AlphaCode code = entry.code;
+    CODE_TYPE type = GET_CODE_TYPE(code);
+    String bitcode = "";
+    auto it = codeIndex.find(code);
+    if (it != codeIndex.end()) {
+      auto &bitvec = (*it).second;  
+      for (int i = bitvec.size(); --i >= 0; ) {
+        bitcode += bitvec.at(i) ? "1" : "0";
+      }
+    }
+    if (code == JUMP_POINTER_TYPE::LONG) {
+      w->writeText(fmt::sprintf("\n    byte <CODE_JUMP_LONG; %s", bitcode));
+    } else if (code == JUMP_POINTER_TYPE::SHORT) {
+      w->writeText(fmt::sprintf("\n    byte <CODE_JUMP_SHORT; %s", bitcode));
+    } else if (code == JUMP_POINTER_TYPE::INDEX) {
+      w->writeText(fmt::sprintf("\n    byte <CODE_JUMP_INDEX; %s", bitcode));
     } else {
       assert(false);
     }

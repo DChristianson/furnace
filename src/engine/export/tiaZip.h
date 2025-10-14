@@ -96,6 +96,11 @@ class DivExportTIAZip : public DivROMExport {
   HuffmanTree *velocityTree = NULL;
   std::map<AlphaCode, std::vector<bool>> velocityCodes;
 
+  std::map<AlphaCode, size_t> jumpTypeFrequencyMap;
+  std::vector<CodebookEntry> jumpTypeCodebook;
+  HuffmanTree *jumpTypeCodeTree = NULL;
+  std::map<AlphaCode, std::vector<bool>> jumpTypeCodes;
+
   std::map<AlphaCode, std::map<AlphaCode, size_t>> initialFrequencyMap;
   std::map<AlphaCode, AlphaCode> controlCodeMergeMap;
   std::map<AlphaCode, std::map<AlphaCode, size_t>> mergedFrequencyMap;
@@ -184,6 +189,13 @@ class DivExportTIAZip : public DivROMExport {
   );
 
   size_t writeCommandCodes(
+    SafeWriter* w,
+    const char *label,
+    const std::vector<CodebookEntry> &codebook,
+    const std::map<AlphaCode, std::vector<bool>> &codeIndex
+  );
+
+  size_t writeJumpCodes(
     SafeWriter* w,
     const char *label,
     const std::vector<CodebookEntry> &codebook,
