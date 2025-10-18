@@ -144,6 +144,8 @@ vis_title_end       ds 1
         jsr audio_update
         JMP_LBL bank_audio_update_return
 
+    AUDIO_DECODE
+
     ORG $8100
 
     #include "Track_data.asm"

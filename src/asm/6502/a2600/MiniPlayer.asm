@@ -135,6 +135,7 @@ overscan_loop
     
   ; codec macros
   AUDIO_CONTROLS
+  AUDIO_DECODE
   AUDIO_UPDATE
   AUDIO_CONTROL_TABLE
 

@@ -101,12 +101,17 @@ class DivExportTIAZip : public DivROMExport {
   HuffmanTree *jumpTypeCodeTree = NULL;
   std::map<AlphaCode, std::vector<bool>> jumpTypeCodes;
 
+  std::map<AlphaCode, std::map<AlphaCode, size_t>> initialControlMap;
   std::map<AlphaCode, std::map<AlphaCode, size_t>> initialFrequencyMap;
   std::map<AlphaCode, AlphaCode> controlCodeMergeMap;
   std::map<AlphaCode, std::map<AlphaCode, size_t>> mergedFrequencyMap;
   std::map<AlphaCode, std::vector<CodebookEntry>> mergedFrequencyCodebooks;
   std::map<AlphaCode, HuffmanTree *> mergedFrequencyTrees;
   std::map<AlphaCode, std::map<AlphaCode, std::vector<bool>>> mergedFrequencyCodes;
+  std::map<AlphaCode, std::map<AlphaCode, size_t>> mergedControlMap;
+  std::map<AlphaCode, std::vector<CodebookEntry>> mergedControlCodebooks;
+  std::map<AlphaCode, HuffmanTree *> mergedControlTrees;
+  std::map<AlphaCode, std::map<AlphaCode, std::vector<bool>>> mergedControlCodes;
 
   // jump statistics
   std::map<AlphaCode, size_t> jumpFrequencyMap;
@@ -156,6 +161,7 @@ class DivExportTIAZip : public DivROMExport {
     const std::vector<AlphaCode> &compressedCodeSequence,
     const std::vector<JUMP_POINTER_TYPE> &jumpTypeAssignments,
     const std::map<AlphaCode, size_t> &jumpMap,
+    const int channel,
     const size_t streamDataOffset,
     std::vector<size_t> &positionMap,
     std::vector<size_t> &tooBigJumps

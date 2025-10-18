@@ -118,7 +118,7 @@ _audio_play_pointer_copy
             rts
     ENDM
 
-    MAC AUDIO_UPDATE
+    MAC AUDIO_DECODE
 
 ADDRESS_INDEX_BITS = 5
 ADDRESS_BITS_HI = 4
@@ -154,9 +154,10 @@ _audio_update_vx
             lda audio_channel_dv,x
             jmp CODE_VELOCITY
 CODE_BRANCH_POINT:
+            ldx audio_span_stream_idx
             audio_decode_span_MACRO
-            sta command_ptr_lo
             ldx audio_data_stream_idx
+            sta command_ptr_lo
             jmp (command_ptr)
 CODE_STOP = audio_play_track
 CODE_RETURN_FF:
@@ -228,9 +229,9 @@ CODE_JUMP_INDEX:
             lsr
             sta audio_stream_next_addr_buf
 _audio_stream_read_return
+            ldx audio_data_stream_idx
             lda audio_stream_skip
             bne _audio_skip_return
-            ldx audio_data_stream_idx
             ldy audio_stream_next_addr_hi
             sty audio_stream_hi,x
             lda audio_stream_next_addr_lo
@@ -251,12 +252,16 @@ _audio_skip_shift
             sta audio_stream_buf,x
 _audio_skip_return
             jmp _audio_update_next_command
+    ENDM
+
+
+    MAC AUDIO_UPDATE
 audio_update
             ldx #2
 _audio_update_loopback:
             stx audio_data_stream_idx
             txa
-            clc
+            clc    ; BUGBUG can just ora #$4
             adc #4
             sta audio_span_stream_idx
             dec audio_timer,x

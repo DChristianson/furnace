@@ -212,6 +212,9 @@ DivExportTIAZip::~DivExportTIAZip() {
   for (auto &x: mergedFrequencyTrees) {
     delete x.second;
   }
+  for (auto &x: mergedControlTrees) {
+    delete x.second;
+  }
   delete volumeTree;
   delete durationTree;
   if (NULL != velocityTree) {
@@ -1182,6 +1185,8 @@ void DivExportTIAZip::assembleBitstreams()
           if (cc == CHANGE_STATE::CHANGE) {
             unsigned char cx = GET_CODE_WRITE_CX(c);
             controlFrequencyMap[cx]++;
+            initialControlMap[channel][cx]++;
+
           }
           CHANGE_STATE fc = GET_CODE_WRITE_FC(c);
           if (fc == CHANGE_STATE::CHANGE) {
@@ -1280,7 +1285,13 @@ void DivExportTIAZip::assembleBitstreams()
 
   logD("jump type tree");
   if (branchPointerOptimization) {
-    jumpTypeFrequencyMap =  {
+    // jumpTypeFrequencyMap = {
+    //   {JUMP_POINTER_TYPE::SHORT, 100},
+    //   {JUMP_POINTER_TYPE::INDEX, 200},
+    //   {JUMP_POINTER_TYPE::LONG, 50}
+    // };
+    // BUGBUG: make configurable...
+    jumpTypeFrequencyMap = {
       {JUMP_POINTER_TYPE::SHORT, 200},
       {JUMP_POINTER_TYPE::INDEX, 100},
       {JUMP_POINTER_TYPE::LONG, 50}
@@ -1306,6 +1317,13 @@ void DivExportTIAZip::assembleBitstreams()
     mergedFrequencyTrees[x.first] = buildHuffmanTree(x.second, maxHuffmanCodes, minWeight, maxBits, 0, mergedFrequencyCodebooks[x.first]);
     mergedFrequencyTrees[x.first]->buildIndex(mergedFrequencyCodes[x.first]);
     SHOW_CODEBOOK(mergedFrequencyCodebooks[x.first], mergedFrequencyCodes[x.first], 5, 0);
+  }
+  // build Huffman trees
+  for (auto &x: mergedControlMap) {
+    logD("merged control tree %d", x.first);
+    mergedControlTrees[x.first] = buildHuffmanTree(x.second, maxHuffmanCodes, minWeight, maxBits, 0, mergedControlCodebooks[x.first]);
+    mergedControlTrees[x.first]->buildIndex(mergedControlCodes[x.first]);
+    SHOW_CODEBOOK(mergedControlCodebooks[x.first], mergedControlCodes[x.first], 5, 0);
   }
 
   logD("volume tree");
@@ -1365,6 +1383,7 @@ void DivExportTIAZip::assembleBitstreams()
           compressedCodeSequence,
           jumpTypeAssignments,
           jumpMap,
+          channel,
           streamDataOffset,
           positionMap,
           tooBigJumps
@@ -1525,13 +1544,13 @@ Bitstream * DivExportTIAZip::assembleDatastream(
   const std::vector<AlphaCode> &compressedCodeSequence,
   const std::vector<JUMP_POINTER_TYPE> &jumpTypeAssignments,
   const std::map<AlphaCode, size_t> &jumpMap,
+  const int channel,
   const size_t streamDataOffset,
   std::vector<size_t> &positionMap,
   std::vector<size_t> &tooBigJumps
 )
 {
   Bitstream *dataStream = new Bitstream(blockSize);
-
   // map from data stream position to sequence position and target address
   std::map<size_t, std::pair<size_t, size_t>> jumpRevisionMap;
   positionMap.resize(compressedCodeSequence.size());
@@ -1562,7 +1581,7 @@ Bitstream * DivExportTIAZip::assembleDatastream(
         if (cc == CHANGE_STATE::CHANGE) {
           unsigned char cx = GET_CODE_WRITE_CX(c);
           logD("DATA %d@%08x - CX %d", i, GET_ADDRESS_COMPONENTS(dataStream->position()), cx);
-          dataStream->writeBits(controlCodes.at(cx));
+          dataStream->writeBits(mergedControlCodes.at(channel).at(cx));
         }
         CHANGE_STATE fc = GET_CODE_WRITE_FC(c);
         if (fc == CHANGE_STATE::CHANGE) {
@@ -1816,7 +1835,16 @@ void DivExportTIAZip::writeBitstreams() {
     trackCommandCodebook,
     trackCommandCodes
   );
-  totalCompressedBytes += writeCodebookFirstValues(trackData, "audio_decode_control", controlCodebook, controlCodes);
+  // totalCompressedBytes += writeCodebookFirstValues(trackData, "audio_decode_control", controlCodebook, controlCodes);
+  for (auto &x : mergedControlCodebooks) {
+    logD("writing first values for %d", x.first);
+    totalCompressedBytes += writeCodebookFirstValues(
+      trackData,
+      fmt::sprintf("audio_decode_control_%d", x.first).c_str(),
+      x.second,
+      mergedControlCodes[x.first]
+    );
+  }
   // totalCompressedBytes += writeCodebookFirstValues(trackData, "audio_decode_frequency", frequencyCodebook, frequencyCodeIndex);
   for (auto &x : mergedFrequencyCodebooks) {
     logD("writing first values for %d", x.first);
@@ -1883,7 +1911,15 @@ void DivExportTIAZip::writeBitstreams() {
     trackCommandCodebook,
     codebookTotal
   );
-  totalCompressedBytes += writeCodebookLengths(trackData, "audio_decode_control", controlCodebook, codebookTotal);
+  //totalCompressedBytes += writeCodebookLengths(trackData, "audio_decode_control", controlCodebook, codebookTotal);
+  for (auto &x : mergedControlCodebooks) {
+    totalCompressedBytes += writeCodebookLengths(
+      trackData,
+      fmt::sprintf("audio_decode_control_%d", x.first).c_str(),
+      x.second,
+      codebookTotal
+    );
+  }
   for (auto &x : mergedFrequencyCodebooks) {
     // KLUDGE: tryna block low weight low value business
     if (compressionLevel > 2 && x.first == 0) {
@@ -1915,7 +1951,15 @@ void DivExportTIAZip::writeBitstreams() {
     trackCommandCodebook,
     trackCommandCodes
   );
-  totalCompressedBytes += writeDataCodes(trackData, "audio_decode_control", controlCodebook, controlCodes);
+  // totalCompressedBytes += writeDataCodes(trackData, "audio_decode_control", controlCodebook, controlCodes);
+  for (auto &x : mergedControlCodebooks) {
+    totalCompressedBytes += writeDataCodes(
+      trackData,
+      fmt::sprintf("audio_decode_control_%d", x.first).c_str(),
+      x.second,
+      mergedControlCodes[x.first]
+    );
+  }
   // totalCompressedBytes += writeDataCodes(trackData, "audio_decode_frequency", frequencyCodebook, frequencyCodeIndex);
   for (auto &x : mergedFrequencyCodebooks) {
     // KLUDGE: tryna block low weight low value business
@@ -1954,7 +1998,27 @@ void DivExportTIAZip::writeBitstreams() {
       "audio_span_stream_idx",
       trackCommandCodebook);
   }
-  writeCodebookMacro(trackData, "audio_decode_control", "audio_data_stream_idx", controlCodebook);
+  if (mergedControlCodebooks.size() == 1) {
+    auto it = mergedControlCodebooks.begin();
+    AlphaCode instrumentCode = (*it).first;
+    trackData->writeText(fmt::sprintf("\naudio_decode_control_FIRST_VALUES = audio_decode_control_%d_FIRST_VALUES", instrumentCode));
+    writeCodebookMacro(trackData, "audio_decode_control", "audio_data_stream_idx", controlCodebook);
+  } else {
+    trackData->writeText("\nCONTROL_TABLE");
+    for (auto &x : mergedControlCodebooks) {
+      AlphaCode instrumentCode = x.first;
+      trackData->writeText(fmt::sprintf("\n    byte audio_decode_control_%d_FIRST_VALUES", instrumentCode));
+    }
+    trackData->writeText("\n    MAC audio_decode_control_MACRO\n");
+    trackData->writeText("    txa\n");
+    trackData->writeText("    lsr\n");
+    trackData->writeText("    tay\n");
+    //trackData->writeText("    ldx audio_data_stream_idx\n");
+    trackData->writeText("    lda CONTROL_TABLE,y\n");
+    trackData->writeText("    tay\n");
+    trackData->writeText("    jsr audio_stream_read_symbol\n");
+    trackData->writeText("    ENDM\n\n");
+  }
   if (mergedFrequencyCodebooks.size() == 1) {
     auto it = mergedFrequencyCodebooks.begin();
     AlphaCode instrumentCode = (*it).first;
@@ -1976,7 +2040,7 @@ void DivExportTIAZip::writeBitstreams() {
     }
     trackData->writeText("\n    MAC audio_decode_frequency_MACRO\n");
     trackData->writeText("    ldy audio_channel_cx,x\n");
-    trackData->writeText("    ldx audio_data_stream_idx\n");
+    //trackData->writeText("    ldx audio_data_stream_idx\n");
     trackData->writeText("    lda CONTROL_FREQUENCY_TABLE,y\n");
     if (compressionLevel > 2) {
       trackData->writeText("    beq ._audio_decode_frequency_literal\n");
@@ -2047,13 +2111,12 @@ void DivExportTIAZip::validateBitstreams() {
         switch (nextCommand) {
           case CODE_WRITE_REGISTERS_111: {
             CHANGE_STATE cc = CHANGE_STATE::CHANGE;
-            unsigned char cx = controlTree->decode(dataStream);
+            unsigned char cx = mergedControlTrees.at(channel)->decode(dataStream);
 
             CHANGE_STATE fc = CHANGE_STATE::CHANGE;
             // unsigned char fx = frequencyTree->decode(dataStream);
             AlphaCode mfc = controlCodeMergeMap.at(cx);
-            assert(mergedFrequencyTrees[mfc] != NULL);
-            unsigned char fx = mergedFrequencyTrees[mfc]->decode(dataStream);
+            unsigned char fx = mergedFrequencyTrees.at(mfc)->decode(dataStream);
 
             CHANGE_STATE vc = CHANGE_STATE::CHANGE;
             unsigned char vx = volumeTree->decode(dataStream);
@@ -2065,13 +2128,12 @@ void DivExportTIAZip::validateBitstreams() {
 
           case CODE_WRITE_REGISTERS_110: {
             CHANGE_STATE cc = CHANGE_STATE::CHANGE;
-            unsigned char cx = controlTree->decode(dataStream);
+            unsigned char cx = mergedControlTrees.at(channel)->decode(dataStream);
 
             CHANGE_STATE fc = CHANGE_STATE::CHANGE;
             // unsigned char fx = frequencyTree->decode(dataStream);
             AlphaCode mfc = controlCodeMergeMap.at(cx);
-            assert(mergedFrequencyTrees[mfc] != NULL);
-            unsigned char fx = mergedFrequencyTrees[mfc]->decode(dataStream);
+            unsigned char fx = mergedFrequencyTrees.at(mfc)->decode(dataStream);
 
             code = CODE_WRITE_REGISTERS(cc, cx, fc, fx, CHANGE_STATE::NOOP, 0, 1);
             lastCx = cx;
@@ -2080,7 +2142,7 @@ void DivExportTIAZip::validateBitstreams() {
 
           case CODE_WRITE_REGISTERS_101: {
             CHANGE_STATE cc = CHANGE_STATE::CHANGE;
-            unsigned char cx = controlTree->decode(dataStream);
+            unsigned char cx = mergedControlTrees.at(channel)->decode(dataStream);
 
             CHANGE_STATE vc = CHANGE_STATE::CHANGE;
             unsigned char vx = volumeTree->decode(dataStream);
@@ -2093,7 +2155,7 @@ void DivExportTIAZip::validateBitstreams() {
 
           case CODE_WRITE_REGISTERS_100: {
             CHANGE_STATE cc = CHANGE_STATE::CHANGE;
-            unsigned char cx = controlTree->decode(dataStream);
+            unsigned char cx = mergedControlTrees.at(channel)->decode(dataStream);
 
             code = CODE_WRITE_REGISTERS(cc, cx, CHANGE_STATE::NOOP, 0, CHANGE_STATE::NOOP, 0, 1);
             lastCx = cx;
@@ -2105,8 +2167,7 @@ void DivExportTIAZip::validateBitstreams() {
             CHANGE_STATE fc = CHANGE_STATE::CHANGE;
             // unsigned char fx = frequencyTree->decode(dataStream);
             AlphaCode mfc = controlCodeMergeMap.at(lastCx);
-            assert(mergedFrequencyTrees[mfc] != NULL);
-            unsigned char fx = mergedFrequencyTrees[mfc]->decode(dataStream);
+            unsigned char fx = mergedFrequencyTrees.at(mfc)->decode(dataStream);
             
             CHANGE_STATE vc = CHANGE_STATE::CHANGE;
             unsigned char vx = volumeTree->decode(dataStream);
@@ -2129,8 +2190,7 @@ void DivExportTIAZip::validateBitstreams() {
             CHANGE_STATE fc = CHANGE_STATE::CHANGE;
             // unsigned char fx = frequencyTree->decode(dataStream);
             AlphaCode mfc = controlCodeMergeMap.at(lastCx);
-            assert(mergedFrequencyTrees[mfc] != NULL);
-            unsigned char fx = mergedFrequencyTrees[mfc]->decode(dataStream);
+            unsigned char fx = mergedFrequencyTrees.at(mfc)->decode(dataStream);
 
             code = CODE_WRITE_REGISTERS(CHANGE_STATE::NOOP, lastCx, fc, fx, CHANGE_STATE::NOOP, 0, 1);
             break;
@@ -2386,7 +2446,26 @@ void DivExportTIAZip::computeMergedFrequenciesDefault() {
   for (size_t i = 0; i < 16; i++) {
     controlCodeMergeMap[i] = 0;
   }
-  if (compressionLevel == 3) {
+  if (compressionLevel == 4) {
+    controlCodeMergeMap = {
+      {0, 0},
+      {1, 0},
+      {2, 0},
+      {3, 0},
+      {4, 2},
+      {5, 0},
+      {6, 0},
+      {7, 0},
+      {8, 1},
+      {9, 0},
+      {10, 0},
+      {11, 0},
+      {12, 3},
+      {13, 0},
+      {14, 0},
+      {15, 0}
+    };
+  } else if (compressionLevel == 3) {
     controlCodeMergeMap = {
       {0, 0},
       {1, 0},
@@ -2435,6 +2514,16 @@ void DivExportTIAZip::computeMergedFrequenciesDefault() {
       row += fmt::sprintf(" %02d", x.second[i]);
     }
     logD("F%02d %03d %s", x.first, mergeFrequencyCode, row);
+  }
+  for (auto &x : initialControlMap) {
+    for (auto &f: x.second) {
+      mergedControlMap[x.first][f.first] += f.second;
+    }
+    String row = "";
+    for (size_t i = 0; i < 31; i++) {
+      row += fmt::sprintf(" %02d", x.second[i]);
+    }
+    logD("C%02d %03d %s", x.first, x.first, row);
   }
   if (compressionLevel > 2) {
     size_t nodeLimit = 32; 
@@ -2778,7 +2867,7 @@ void DivExportTIAZip::writeCodebookMacro(
     w->writeText(fmt::sprintf("    lda #%d\n", code));
 
   } else {
-    w->writeText(fmt::sprintf("    ldx %s\n", track));
+    //w->writeText(fmt::sprintf("    ldx %s\n", track));
     w->writeText(fmt::sprintf("    ldy #%s_FIRST_VALUES\n", label));
     w->writeText("    jsr audio_stream_read_symbol\n");
   }
