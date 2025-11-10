@@ -266,6 +266,7 @@ _audio_update_loopback:
             sta audio_span_stream_idx
             dec audio_timer,x
             bpl _audio_update_next_channel
+            inc audio_timer,x ; safety in case we go without update for enough cycles to wrap
 _audio_update_next_command
             lda #>CODE_WRITE_REGISTERS_111
             sta command_ptr_hi
