@@ -57,7 +57,11 @@ audio_play_track
             sta audio_channel_1+1
             rts
     ENDIF
-    ENDM           
+    ENDM         
+
+    MAC AUDIO_DECODE
+    ENDM  
+    
     MAC AUDIO_UPDATE
     IF AUDIO_TRACK_ADDRESS_BITS <=8
 audio_update

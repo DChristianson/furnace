@@ -283,7 +283,8 @@ _audio_update_loopback:
             sta audio_span_stream_idx
             dec audio_timer,x
             bpl _audio_update_next_channel
-            inc audio_timer,x ; safety in case we go without update for enough cycles to wrap
+            inc audio_timer,x ; safety
+_audio_update_next_command
             lda #>CODE_WRITE_REGISTERS_111
             sta command_ptr_hi
             audio_decode_command_MACRO
@@ -343,7 +344,7 @@ audio_data_stream_save_return
             ;ldx audio_data_stream_idx already set
             lda audio_stream_buf,x
             sta audio_data_last_buf,x
-            cmp audio_data_ff_buf,x
+            cmp audio_data_ff_buf,x ; BUGBUG: three byte comparison trick (correct? ff is lo)
             lda audio_stream_lo,x
             sta audio_data_last_lo,x 
             sbc audio_data_ff_lo,x

@@ -49,6 +49,9 @@ _song_clean_loop
             rts
     ENDM
 
+    MAC AUDIO_DECODE
+    ENDM
+
     MAC AUDIO_UPDATE
 audio_update
             ; check for interrupt
