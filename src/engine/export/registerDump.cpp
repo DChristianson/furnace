@@ -51,8 +51,8 @@ RegisterDump::RegisterDump(
         e->getRow(),
         -1,
         DivSystem::DIV_SYSTEM_NULL,
-        e->getTotalSeconds(),
-        e->getTotalTicks(),
+        e->getCurTime().seconds,
+        e->getCurTime().micros,
         e->getCurHz(),
         -1,
         -1
@@ -73,8 +73,8 @@ RegisterDump::RegisterDump(
             e->getRow(),
             i,
             system,
-            e->getTotalSeconds(),
-            e->getTotalTicks(),
+            e->getCurTime().seconds,
+            e->getCurTime().micros,
             e->getCurHz(),
             registerWrite.addr,
             registerWrite.val
@@ -93,8 +93,8 @@ RegisterDump::RegisterDump(
       e->getRow(),
       -1,
       DivSystem::DIV_SYSTEM_NULL,
-      e->getTotalSeconds(),
-      e->getTotalTicks(),
+      e->getCurTime().seconds,
+      e->getCurTime().micros,
       e->getCurHz(),
       -1,
       -1
