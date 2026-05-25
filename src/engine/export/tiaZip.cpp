@@ -27,7 +27,16 @@
 #include "../../ta-log.h"
 
 //
-//
+//  - high level goals
+//    - create tools for exporting from furnace to multiple compact formats
+//        - simple schemes with no bank switching
+//        - more complex schemes with bank switching and/or dynamic decompression
+//        - extremely low memory requirements
+// - approach:
+//    - current solution is an all in one furnace plugin that produces compressed output in a custom format, along with a player in 6502 assembly that can be compiled into a ROM or included in an existing ROM
+//    - maybe better: an exporter that produces a highly annotated register dump, then separate tools for compression and packaging
+//    - this would allow more flexibility in compression approaches and better testability
+//    - for now will stick with all in one solution, but will try to keep it modular and testable
 //  - compression goals
 //    - Coconut_Mall in 4k
 //       - JUMP+SKIP encoded  4350 data / 1213 jump = 5563
@@ -864,6 +873,7 @@ void DivExportTIAZip::compressCodeSequence(
   std::vector<AlphaCode> &trackSequence,
   std::map<size_t, size_t> &trackPositionMap
 ) {
+  logD("compressing subsong %d channel %d, code sequence size %d", subsong, channel, codeSequence.size());
 
   trackSequence.reserve(codeSequence.size());
   compressedCodeSequence.reserve(codeSequence.size());
@@ -945,9 +955,10 @@ void DivExportTIAZip::compressCodeSequence(
   }
 
   // prune all the trivial branch frequencies
+  logD("prune trivial branches");
   std::vector<size_t> skipMap;
   skipMap.resize(branchFrequencyMap.size(), 0);
-  for (size_t i = 0; i < branchFrequencyMap.size(); i++) {
+  for (size_t i = 0; i < branchFrequencyMap.size() - 1; i++) {
     auto &branchFrequencies = branchFrequencyMap[i];
     size_t maxFreq = 0;
     size_t skipIndex = copyMap[i + 1];
@@ -964,6 +975,7 @@ void DivExportTIAZip::compressCodeSequence(
   // no longer need suffix tree
   delete root;
 
+  logD("labeling sequence");
   std::vector<size_t> labels;
   labels.resize(alphaSequence.size());
   size_t end = 0;

@@ -76,8 +76,14 @@ if(HAVE_GIT)
 endif()
 
 if(NOT WIN32)
-    find_package(Iconv)
-    set(HAVE_ICONV ${Iconv_FOUND})
+    if(APPLE)
+        # On macOS iconv is provided by libc; avoid importing Iconv::Iconv,
+        # which may carry an SDK include path that does not exist locally.
+        set(HAVE_ICONV 1)
+    else()
+        find_package(Iconv)
+        set(HAVE_ICONV ${Iconv_FOUND})
+    endif()
 endif()
 
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")

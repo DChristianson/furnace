@@ -8,6 +8,15 @@ AUDF1 = 24 # 0x18
 AUDV0 = 25 # 0x19
 AUDV1 = 26 # 0x1a
 
+DATA_0_LO = 131
+DATA_0_HI = 132
+DATA_1_LO = 133
+DATA_1_HI = 134
+SPAN_0_LO = 135
+SPAN_0_HI = 136
+SPAN_1_LO = 137
+SPAN_1_HI = 138
+
 
 trigger_address_map = {
     'WTrap[00]': AUDC0,
@@ -16,6 +25,14 @@ trigger_address_map = {
     'WTrap[03]': AUDF1,
     'WTrap[04]': AUDV0,
     'WTrap[05]': AUDV1,
+    'WTrap[06]': DATA_0_LO,
+    'WTrap[07]': DATA_0_HI,
+    'WTrap[08]': DATA_1_LO,
+    'WTrap[09]': DATA_1_HI,
+    'WTrap[0a]': SPAN_0_LO,
+    'WTrap[0b]': SPAN_0_HI,
+    'WTrap[0c]': SPAN_1_LO,
+    'WTrap[0d]': SPAN_1_HI,
 }
 
 register_masks = [
@@ -38,11 +55,14 @@ def parse_stella_log(fp):
           # if line.startswith("WTrap"):
           #     raise Exception('failed to parse line ' + line)
           continue
+        addr = trigger_address_map[m.group('trigger')]
+        if addr >= 128:
+            continue
         yield (
             int(m.group('frame')),
             int(m.group('scanline')),
             int(m.group('cycle')),
-            trigger_address_map[m.group('trigger')],
+            addr,
             int(m.group('accumulator'), 16)
         )
 
@@ -90,6 +110,40 @@ def compare_registers(a, b):
               break
     return True
 
+
+def sequence_edit_distance(actual, expected):
+    # Trim shared prefix and suffix first to keep the dynamic program small.
+    start = 0
+    while start < len(actual) and start < len(expected) and compare_registers(actual[start], expected[start]):
+        start += 1
+
+    end_actual = len(actual)
+    end_expected = len(expected)
+    while end_actual > start and end_expected > start and compare_registers(actual[end_actual - 1], expected[end_expected - 1]):
+        end_actual -= 1
+        end_expected -= 1
+
+    actual = actual[start:end_actual]
+    expected = expected[start:end_expected]
+
+    if not actual:
+        return len(expected)
+    if not expected:
+        return len(actual)
+
+    previous = list(range(len(expected) + 1))
+    for i, actual_frame in enumerate(actual, start=1):
+        current = [i]
+        for j, expected_frame in enumerate(expected, start=1):
+            substitution_cost = 0 if compare_registers(actual_frame, expected_frame) else 1
+            current.append(min(
+                previous[j] + 1,
+                current[j - 1] + 1,
+                previous[j - 1] + substitution_cost
+            ))
+        previous = current
+    return previous[-1]
+
 if __name__ == '__main__':
     stella_writes = [[0, 0, 0, 0, 0, 0]]
     first_stella_write = -1
@@ -101,6 +155,8 @@ if __name__ == '__main__':
             extend_frames(stella_writes, frame)
             ri = address - AUDC0
             stella_writes[frame][ri] = value & register_masks[ri]
+    if first_stella_write < 0:
+        first_stella_write = 0
     print(f"read {len(stella_writes)} frames, first write at {first_stella_write}")
     stella_writes = stella_writes[first_stella_write:]
     expected_writes = [[0, 0, 0, 0, 0, 0]]
@@ -118,17 +174,27 @@ if __name__ == '__main__':
                 rows.append(rowid)
             ri = address - AUDC0
             expected_writes[frame][ri] = value & register_masks[ri]
+    if first_expected_write < 0:
+        first_expected_write = 0
     print(f"read {len(expected_writes)} frames, first write at {first_expected_write}")
     expected_writes = expected_writes[first_expected_write:]
     rows = rows[first_expected_write:]
     same = True
-    for index, (a, b, rowid) in enumerate(zip(stella_writes, expected_writes, rows)):
-        if compare_registers(a, b):
+    frame_count = max(len(stella_writes), len(expected_writes))
+    for index in range(frame_count):
+        a = stella_writes[index] if index < len(stella_writes) else None
+        b = expected_writes[index] if index < len(expected_writes) else None
+        rowid = rows[index] if index < len(rows) else '<missing row>'
+        if a is not None and b is not None and compare_registers(a, b):
             label = 'good'
         else:
             same = False
             label = '----'
         print(label, index, a, b, rowid)
+    edits = sequence_edit_distance(stella_writes, expected_writes)
+    normalizer = max(len(stella_writes), len(expected_writes))
+    normalized_distance = (edits / normalizer) if normalizer else 0.0
+    print(f"sequence edits={edits} normalized_edit_distance={normalized_distance:.6f}")
     if not same:
         exit(-1)
     

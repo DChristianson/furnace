@@ -101,7 +101,7 @@ class MidiInCore: public MidiInApi
   std::string getPortName( unsigned int portNumber );
 
  protected:
-  MIDIClientRef getCoreMidiClientSingleton(const std::string& clientName) throw();
+    MIDIClientRef getCoreMidiClientSingleton(const std::string& clientName);
   void initialize( const std::string& clientName );
 };
 
@@ -121,7 +121,7 @@ class MidiOutCore: public MidiOutApi
   void sendMessage( const unsigned char *message, size_t size );
 
  protected:
-  MIDIClientRef getCoreMidiClientSingleton(const std::string& clientName) throw();
+    MIDIClientRef getCoreMidiClientSingleton(const std::string& clientName);
   void initialize( const std::string& clientName );
 };
 
@@ -1017,7 +1017,7 @@ MidiInCore :: ~MidiInCore( void )
   delete data;
 }
 
-MIDIClientRef MidiInCore::getCoreMidiClientSingleton(const std::string& clientName) throw() {
+MIDIClientRef MidiInCore::getCoreMidiClientSingleton(const std::string& clientName) {
 
   if (CoreMidiClientSingleton == 0){
       // Set up our client.
@@ -1355,7 +1355,7 @@ MidiOutCore :: ~MidiOutCore( void )
   delete data;
 }
 
-MIDIClientRef MidiOutCore::getCoreMidiClientSingleton(const std::string& clientName) throw() {
+MIDIClientRef MidiOutCore::getCoreMidiClientSingleton(const std::string& clientName) {
 
   if (CoreMidiClientSingleton == 0){
       // Set up our client.
